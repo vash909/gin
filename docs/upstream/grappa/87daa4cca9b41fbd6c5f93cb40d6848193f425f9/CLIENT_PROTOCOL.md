@@ -1,0 +1,2315 @@
+# grappa — client protocol
+
+A guide for authors of **third-party clients**. grappa is a REST + Phoenix
+Channels bouncer designed to be spoken by clients we don't write
+(`cicchetto` and `shottino` are ours; a third one is the point). This
+document describes the wire contract; **the source is authoritative** —
+every section points at a **module + function**, and where they disagree,
+the code wins. Anchors are deliberately NOT `file:line`: line numbers
+drift the moment `main` moves, and five of the six this document used to
+carry had rotted into unrelated prose by the time anyone checked. A
+function name survives a refactor or fails loudly; a line number rots
+silently. Filed for GH #447.
+
+> **Credit.** The contract *shape* here is lifted, with attribution, from
+> [amiantos/lurker](https://github.com/amiantos/lurker) (MPL-2.0) —
+> an independently-built bouncer with the same "the client never speaks
+> IRC" premise. We copied the shape, not the code (different stacks
+> entirely); the casing and naming are grappa's own (see "Wire format").
+
+---
+
+## 1. First contact — `GET /api/config`
+
+Hit this **before** you authenticate or open a socket. It is
+unauthenticated, carries no secrets, and is cacheable.
+
+```
+GET /api/config
+→ 200 application/json
+{
+  "server": "grappa",
+  "version": "1.4.2-abc1234",
+  "protocol_version": 2,
+  "min_protocol_version": 1,
+  "push_content_encoding": "aes128gcm"
+}
+```
+
+> The numbers above are an ILLUSTRATION, not a specification. Since
+> 2026-08-21 `protocol_version` moves on every wire-shape change (§2a), so
+> any figure written into a document is stale by design. Read them from
+> this endpoint; the server's own source of truth is `Grappa.Protocol`.
+
+| field | meaning |
+|-------|---------|
+| `server` | server identity / edition. Always `"grappa"` for this implementation. |
+| `version` | human-facing **software release** string (the CTCP VERSION value). Diagnostic only — **never** key compatibility off this. |
+| `protocol_version` | the wire protocol the server currently speaks. |
+| `min_protocol_version` | the oldest client protocol the server still accepts. If your protocol is below this, the server will refuse your WebSocket (see §3). |
+| `push_content_encoding` | the HTTP content coding this server encrypts Web Push payloads under. `"aes128gcm"` is RFC 8291 over the RFC 8188 coding — salt and server key live in the body header, so the body decrypts standalone. |
+
+> **Web Push clients: check `push_content_encoding` before you blame
+> your decryptor.** A server older than 2026-08-14 answers without this
+> field, and what it sends is the superseded
+> draft-ietf-webpush-encryption-04 `aesgcm`, whose salt and server key
+> travel in the `encryption:` and `crypto-key:` HEADERS. Any transport
+> that drops headers — UnifiedPush does, by design — hands you a body
+> you cannot decrypt no matter how correct your key material is. So:
+> **field absent, or any value other than `"aes128gcm"`** ⇒ that server
+> cannot deliver you a self-contained payload, and the honest thing to
+> show the user is "this server is too old for encrypted push", not a
+> decryption error. Treating an absent field as `"aes128gcm"` will make
+> you diagnose your own crypto for someone else's bug.
+>
+> This is a **capability, not a version**: the coding switched without
+> moving `protocol_version` (it changes nothing about the WebSocket
+> wire), and `version` is off-limits for feature gating per the rule
+> above. That is exactly why the field exists.
+
+> **Operator note — this endpoint is public by design.** It requires no
+> auth and carries no secrets, so `version` (the software release string —
+> `X.Y.Z` on a released build, `X.Y.Z-<shortsha>` on an unreleased one) is
+> disclosed to anyone who can reach the URL. That is the same value grappa
+> already hands any IRC user via `CTCP VERSION`, and a discovery endpoint
+> that hid what it is would be self-defeating — so the exposure is
+> deliberate, not a leak. Self-hosted operators who consider even that a
+> concern can front `/api/config` however they like; grappa treats it as
+> public.
+
+Source: `GrappaWeb.ConfigController.show/2`, routed as `get "/config"`
+in the `scope "/api"` block of `GrappaWeb.Router`. The two numbers come
+from `Grappa.Protocol.version/0` and `Grappa.Protocol.min_version/0`, and
+the push capability from `Grappa.Push.content_encoding/0` — each the
+single source of truth for its own value.
+
+---
+
+## 2. Versioning + the additive-only rule
+
+There are **two** numbers, and they mean different things:
+
+- **`protocol_version`** — what the server speaks *now*.
+- **`min_protocol_version`** — the floor. A client below it is refused.
+
+**The WIRE is additive-only.** Both sides MUST follow it:
+
+- New **frame kinds**, new **event types**, and new **fields** may appear
+  at ANY time.
+- An **unknown verb or field is never fatal, in BOTH directions.** A
+  client MUST ignore fields and events it does not recognise. The server,
+  symmetrically, replies to an unknown client verb with a non-fatal error
+  frame and keeps the socket open.
+- **Existing fields are never repurposed.** A field means the same thing
+  forever.
+- **Removal is not "never" — it is "only on a ruling" (2026-08-26).**
+  See §2b. Design your client as if a field could go, i.e. do not make a
+  hard requirement of one you do not actually read.
+
+That half is what keeps an OLD client working against a NEW server.
+
+### 2a. `protocol_version` moves on EVERY wire-shape change (2026-08-21)
+
+⚠️ **This reverses what this section said until 2026-08-21.** It used to
+say an additive change lands *"WITHOUT a `protocol_version` bump"*, and
+that `protocol_version` moves only for a change the additive rule cannot
+express. **Both sentences are withdrawn.** The number now moves for every
+change to the wire shape, additive included.
+
+**Why, because the reason is the part you need:** additivity describes
+what the SERVER emits, and it says nothing about what a CLIENT requires.
+The moment a client stops tolerating a missing field and starts requiring
+it, that client can no longer talk to a server predating the field — and
+no additive statement can express that, because nothing was added or
+removed *on the server*. The direction of the break is new-client →
+old-server, which is precisely the direction `protocol_version` exists to
+describe.
+
+The second reason is that the number is only worth comparing against if
+it is **total**. A client testing `server_protocol >= N` is entitled to
+read that as *"the server has everything N had"*. One un-bumped field
+addition makes that reading false, and it stays false forever after. A
+floor that lies is worse than no floor, because the client believed it
+checked.
+
+Measured, and it is why the rule changed: `protocol_version` sat at `1`
+from its introduction (2026-07-27) through **five** additive field
+additions — `recoverable`, `inviter`, `list_modes_queryable`,
+`chantypes`, `prefix_order` — every one of which the reference client
+later came to require. Under the old rule that was all correct, and the
+number told nobody anything.
+
+**`min_protocol_version` is a different axis and does NOT follow.** It
+rises only when old clients can no longer be *served*. An additive field
+strands nobody, so the ordinary bump leaves the floor exactly where it
+is: `protocol_version` has moved several times under this rule while
+`min_protocol_version` has never left `1`. (The current pair is not
+written here on purpose — see the note under `GET /api/config`; the
+moving number is stale the moment it is typed, and it has been, twice.)
+
+### 2b. Two fields have been REMOVED, and what that costs you
+
+⚠️ `row_count` is gone from the archive entry
+(`GET /networks/:network_id/archive`) as of protocol **v8**. It was the
+first field this wire took back. The second is `dm_conversation_id`, gone
+from scrollback rows and `query_windows_list` entries as of **v37** — see
+§5f; it was always optional, so a permissive client never noticed.
+
+**Why it was allowed.** An exact per-target row count has to visit that
+target's rows, which is the whole `(subject, network)` partition, so
+while the field was emitted the listing's cost was bound to the size of
+the account rather than to its number of targets. The field was the only
+thing standing between the server and a listing that seeks once per
+target. Nothing else about the entry changed: `target`, `kind` and
+`last_activity` mean what they always meant.
+
+**The bar for a future removal**, so you can judge how likely another is:
+the field must be what blocks a property the server cannot otherwise
+have; the break must be measured against a real client rather than
+argued; and it takes an explicit ruling. Ordinary tidying does not
+qualify. `dm_conversation_id` was unused when it went, but that is not
+what let it go: it could not be emitted without a whole table kept in step
+with every DM write, which is the property its removal buys back (§5f).
+
+**What it means for your client, concretely.** Validate *permissively*:
+tolerate an absent field you do not read, and never make a hard
+requirement of one you only pass through. The reference client got this
+wrong in exactly the way to learn from — it rendered `target` and `kind`
+only, never `row_count`, yet its generated schema listed the field as
+required, so a v8 server's response failed validation wholesale and its
+archive pane went blank. It never used the value it insisted on.
+
+`min_protocol_version` did **not** move for this, deliberately: it gates
+the whole socket, and this break is one listing. A pre-v8 client is
+still served everything else. The signal you get is `protocol_version`,
+in `GET /api/config` and in the user-topic join reply.
+
+### 2c. What this means for you, as a client author
+
+- **A bump is not a breakage notice.** Under this rule most bumps carry
+  nothing you must react to. Read `min_protocol_version` for that — it is
+  the only number that can refuse you.
+- **Compare, don't equal.** Test `protocol_version >= N` for the newest
+  feature you require; never `== N`, and never gate on the `version`
+  release string.
+- **Keep ignoring what you don't recognise.** The wire is still
+  additive-only, so a server ahead of you sends you fields you can drop.
+- **If you make a server field mandatory, you have raised your own
+  floor.** Record the `protocol_version` that introduced it and refuse —
+  or degrade, loudly — below it. A client that silently invents a value
+  for a field an old server never sent is putting a fact in that server's
+  mouth; that is the failure this rule was written after.
+
+---
+
+## 3. The WebSocket handshake
+
+The realtime surface is Phoenix Channels at `/socket/websocket`. Two
+signals ride the handshake:
+
+### 3a. Authentication — the bearer, via subprotocol
+
+Your session bearer (obtained from `POST /auth/login`) rides the
+`Sec-WebSocket-Protocol` header as `base64url.bearer.phx.<token>`, NOT the
+URL. This keeps the credential out of access logs. The phoenix.js client
+does this for you via `new Socket(url, {authToken: token})`; a raw client
+sends the bearer subprotocol alongside `"phoenix"`. A missing/invalid
+bearer is rejected with **403**. Source:
+`GrappaWeb.UserSocket` (`connect/3`, `extract_token/1`)
++ `GrappaWeb.Endpoint` (`auth_token: true`).
+
+### 3b. Protocol version — the `client_proto` query param
+
+Declare the protocol version your client speaks as the **`client_proto`
+query parameter** on the upgrade URL:
+
+```
+wss://host/socket/websocket?client_proto=1&vsn=2.0.0
+```
+
+- `client_proto` — YOUR protocol version. This is public, not a secret,
+  so it rides the URL (unlike the bearer). Do NOT confuse it with `vsn`,
+  which is phoenix's own transport-serializer version — a different thing.
+- If you declare **below** `min_protocol_version`, the server refuses the
+  upgrade with a clean **`426 Upgrade Required`** whose JSON body names
+  the floor:
+  ```
+  426 { "error": "upgrade_required", "protocol_version": 2, "min_protocol_version": 2 }
+  ```
+  This is DISTINCT from the 403 you get for a bad bearer — a 426 means
+  "upgrade your client," a 403 means "fix your credential."
+- If you **omit** `client_proto` entirely, you are treated as **current**
+  (the server sends you nothing new). This is the zero-friction path and
+  is exactly what our own clients do until they need to negotiate.
+- If you send a value the server **cannot read as an integer** — a stray
+  suffix (`1/websocket`), a non-numeric string, or an array form
+  (`?client_proto[]=1`) — you are ALSO treated as current, and the connect
+  succeeds. Your declaration is discarded, so you get none of the
+  negotiation you asked for: **an accepted socket is not evidence that your
+  version was understood.** Since #1416 the server records which of the
+  three it saw (`client_proto=absent|declared|unreadable` on the connect
+  log line and in the `[:grappa, :ws, :connect]` telemetry metadata), so
+  ask your operator to grep that key if a declaration is not taking
+  effect. This is the trap that bit our own reference client: phoenix.js
+  concatenates the transport path onto the endpoint string, so a query
+  baked into the endpoint URL becomes part of a parameter VALUE — put the
+  version in the Socket's `params`, not in the endpoint.
+- There is **no upper bound**: declaring a version higher than the server
+  speaks is accepted, and the socket opens.
+  ⚠️ **Accepted is not the same as safe, and this bullet used to conflate
+  the two.** It read *"a newer client tolerates an older server"* — an
+  inference from wire additivity that holds for the server's emissions and
+  not for your requirements. The server cannot know which of its fields
+  you made mandatory, so it cannot refuse you on that basis; there is no
+  `max_protocol_version` and there will not be one. Comparing
+  `protocol_version` from `/api/config` against the version that
+  introduced the fields you require is **your** side of the handshake
+  (§2c), and the socket opening tells you nothing about it.
+
+Source: `GrappaWeb.UserSocket`
+(`check_protocol_version/1`) → returns `{:error, :upgrade_required}`,
+which the endpoint's `error_handler`
+(`GrappaWeb.UserSocket.handle_ws_error/2`, wired on the `socket "/socket"`
+declaration in `GrappaWeb.Endpoint`) turns into the 426. The version check runs
+**before** auth, so a too-old client is refused regardless of its
+credential.
+
+### 3c. The initial payload
+
+The first topic to join is the user topic `grappa:user:{user}`. Its join
+reply is your **initial payload** and carries `protocol_version`, so a
+client that skipped `/api/config` still learns it on connect:
+
+```
+join "grappa:user:vjt" → {:ok, {"protocol_version": 2}}   ← illustrative, see §2a
+```
+
+Source: `GrappaWeb.GrappaChannel`, the `join_reply({:user, _}, _)`
+clause — it answers `%{protocol_version: Grappa.Protocol.version()}`.
+
+---
+
+## 4. Topics
+
+Topics are user-rooted (single source of truth
+`Grappa.PubSub.Topic`):
+
+| topic | shape | source |
+|-------|-------|--------|
+| user | `grappa:user:{user}` | `Topic.user/1` |
+| network | `grappa:user:{user}/network:{slug}` | `Topic.network/2` |
+| channel | `grappa:user:{user}/network:{slug}/channel:{chan}` | `Topic.channel/3` |
+
+The channel segment is ASCII-folded server-side — `A-Z` only, so join with
+any casing and you land on the canonical window, but `#foo[1]` and
+`#foo{1}` are DIFFERENT topics and non-ASCII case (`#CAFÉ` vs `#café`) is
+NOT folded. The fold is shape-blind: a DM window's segment is the peer
+nick and folds the same way, so the topic for a query with `Guest87449`
+is `…/channel:guest87449`. Events push on the matching topic as `"event"`
+frames; treat unknown `kind` values as ignorable per §2.
+
+**Window state is a USER-topic event, not a per-channel one.** The
+transitions that open, fail, or close a window — `window_pending`,
+`window_invited`, and the three terminal kinds `joined`, `join_failed`,
+`kicked` — are broadcast on your **user** topic. The per-channel topic
+emits them only once, to your socket alone, as the join-time snapshot of
+a window that already reached that state before you subscribed. So:
+subscribe to the user topic at connect and drive window state from there;
+if you wait on the per-channel topic for a live `joined`, it never
+arrives. Everything the per-channel topic broadcasts in its own right —
+messages, members, topic, modes, read cursor — is post-join by
+definition, which is precisely why window state cannot live there. This
+is a topic-selection fact you cannot derive from the payloads, which are
+byte-identical on both carriers.
+
+**Not every user-topic event reaches every connection (#1088).** The reply
+to an informational command you issued — `who_reply`, `names_reply`,
+`whois_bundle`, `whowas_bundle`, `server_reply`, `banlist_bundle`,
+`links_bundle` — is delivered on your user topic **only to the connection
+that issued the command**. Nothing changes for the client that asked: same
+topic, same `"event"` frame, same payload. What changed is that your other
+devices no longer receive it, so do not treat one of these as a cue to
+refresh shared state — it is an answer to a question this socket asked.
+
+Two consequences worth designing for: if your socket drops before the ircd
+answers, the reply is dropped with it (re-issue the command); and `lusers_bundle`
+is the one member of the family that still fans out to every connection,
+because the server also emits it unsolicited at connect — gate it on your own
+consume-once request flag.
+
+**Never re-derive services identity from a mode letter (#388).** Whether
+the operator is identified to NickServ arrives as one user-topic event:
+
+```json
+{"kind": "session_identity_changed", "network_id": 3,
+ "identified": true, "account": "vjt"}
+```
+
+`identified` is the verdict and the ONLY thing to gate on; the server folds
+every flavour's evidence behind it (bahamut's `+r` umode, OFTC's `+R`,
+IRCv3 `account-notify`, numeric 330 RPL_WHOISLOGGEDIN, and numeric 900
+RPL_LOGGEDIN — which on a SASL login is the only one of the four that
+arrives at all). `account` is the
+services account name when the ircd exposes one and `null` otherwise —
+including while `identified` is `true`, which is the normal bahamut case.
+It is display data; absence of an account is not absence of identity.
+
+A client that instead reads the `umode_changed` letters and tests for `"r"`
+gets a bahamut-only answer: solanum (Libera) assigns no registered umode at
+all, so it reads permanently unidentified, and on OFTC lowercase `r` is an
+unrelated oper notice mode, so it reads identified for the wrong reason.
+The event is pushed on both the live edge and the user-topic cold snapshot,
+so a reload re-learns the verdict; the REST twin is the `registered` field
+of `GET /networks`' `connection` object.
+
+### 4a. Muting peer presence on a channel you are not reading (#1769)
+
+A per-channel topic accepts ONE join param. Join with
+
+```json
+{"presence": false}
+```
+
+and the server stops pushing you `join`, `part` and `quit` rows for that
+channel — the three whose only consumer is the member list. Everything else
+on that topic is delivered exactly as before: messages, `window_counts`, the
+read cursor, topic and mode changes, and the cold-subscribe snapshots.
+
+**You do not have to do anything.** Omit the param and you get everything, as
+you do today. Only the literal `false` suppresses — `true`, a string, or a
+misspelled key all mean the default — so a server that predates this reads
+your params and ignores them, and a client that never learns about them is
+unaffected. That is why this is a join param and not a negotiated capability:
+there is no flag day and nothing to coordinate.
+
+Three things are NEVER suppressed, and they are the reason the drop set is
+three kinds rather than five:
+
+* **`nick_change`** — you need it to migrate anything keyed by a nick
+  (scrollback, read cursors, an open query window). Miss one and your caches
+  point at a nick nobody holds, silently.
+* **`mode`** — channel-mode state outlives the pause.
+* **your OWN `join`/`part`/`quit`** — an own PART is how you learn the window
+  is gone. The server matches your live nick with the same ASCII fold it uses
+  everywhere else and follows it across a rename.
+
+The intended use is a window the operator has stopped looking at: leave the
+topic joined (leaving it would make the window blind, not quiet — it carries
+the messages too), re-join with `{"presence": false}` when the window goes
+cold, and re-join without the param when it comes back. **Re-join, plural:
+the param is read once, at join.** Changing your mind means joining the topic
+again — Phoenix closes the previous channel for you — and the events that
+arrive between the two joins are not replayed, so refetch the member list on
+resume and backfill messages from your last known id.
+
+Check `protocol_version >= 7` before relying on it. An older server will
+accept the join and quietly send you everything.
+
+### 4b. A peer offered the operator a file (issue 2089)
+
+grappa RECEIVES `DCC SEND`. It never listens, and it never dials until a
+human says so — so an inbound offer reaches you as a **consent prompt**,
+on the USER topic, and waits.
+
+```json
+{"kind": "dcc_offer", "network": "azzurra", "channel": "$server",
+ "offer_id": "n4xk…", "from": "alice",
+ "filename": "holiday.jpg", "size": 12345}
+```
+
+```json
+{"kind": "dcc_offer_resolved", "network": "azzurra", "channel": "$server",
+ "offer_id": "n4xk…", "resolution": "accepted"}
+```
+
+Four things you cannot derive from those payloads, and one of them will
+cost you a bug if you guess:
+
+**🔴 An offer is NOT window state, and there is deliberately no `state`
+field.** An offer sits IN a window; it is not one. If you mirror it into
+whatever store drives your sidebar, you will draw a pseudo-window for a
+file nobody has accepted. `channel` says where to RENDER the prompt and
+nothing more — and it is very often `$server`, because a CTCP from a
+stranger mints no window (the same rule a VERSION probe obeys). Render the
+banner in the window named; do not create one.
+
+**It expires on its own.** The server holds an offer for a bounded window
+and then resolves it with `"expired"`, whether or not anyone was looking.
+Do not treat a banner as durable UI, and do not keep one on screen after
+`dcc_offer_resolved` — that event is your only signal on every device, and
+a decision taken on a phone has to take the laptop's banner down.
+`resolution` is closed at three (`accepted` / `refused` / `expired`); a
+client that understands the kind and ignores the reason still behaves
+correctly, which is why it is one event and not three.
+
+**`accepted` means ADMITTED and started, never ARRIVED.** The transfer runs
+detached. The outcome lands as an ordinary scrollback row — a `privmsg`
+from the peer carrying a 📥 link when the bytes arrive, a `server_event`
+from grappa when they do not. Do not render progress you are not being
+sent.
+
+**The cold path is real and you need it.** The offer event is broadcast
+once and PubSub does not replay, so a reload loses the banner while the
+hold keeps running. Two doors serve the same fact: the user-topic
+after-join snapshot re-pushes every held offer as the SAME `dcc_offer`
+payload (no second code path), and `GET /networks/:network_id/dcc_offers`
+returns `{"offers": [...]}` of the same shape for a client not yet on the
+socket.
+
+Acting on one:
+
+| route | answer |
+|---|---|
+| `POST /networks/:network_id/dcc_offers/:offer_id/accept` | **202** `{"ok": true}` — admitted, not arrived |
+| `DELETE /networks/:network_id/dcc_offers/:offer_id` | 200 `{"ok": true}` |
+
+Fetching the file is **not** on this prefix (protocol v21, issue 2127):
+
+| route | answer |
+|---|---|
+| `GET /dcc_files/:slug[.ext]` | the bytes — top level, **no auth**, same surface as `GET /uploads/:slug` |
+
+The 26-char base32 slug IS the access token, exactly as it is for an
+upload: whoever holds the URL fetches the file, with no bearer, until the
+retention reaper removes it. You do not build this URL — the server mints
+it absolute into the delivery row's body and you render it as an ordinary
+link. It moved off `/networks/:network_id/dcc_files/:slug` because that
+route required an `Authorization` header, and a link tapped out of
+scrollback opens a tab that carries none, so the row's link only ever
+collected a 401.
+
+An optional extension may follow the slug (`<slug>.mp4`), derived from the
+peer's declared filename and whitelist-normalised. It is **decoration**:
+the lookup uses the 26 characters alone, so `<slug>`, `<slug>.mp4` and
+`<slug>.zip` all fetch the same bytes. The response is always
+`application/octet-stream` + `Content-Disposition: attachment` +
+`X-Content-Type-Options: nosniff`, with no branch — never treat the
+extension as a content type. Every miss (unknown slug, malformed slug,
+reaped file) is the same 404 `{"error": "not_found"}`.
+
+404 `{"error": "not_held"}` on either write door means the handle names
+nothing — resolved on another device, or the hold elapsed. 429 and 507 on
+the accept are the daily allowance and the spool budget respectively.
+
+**🔴 Refusing sends NOTHING to the peer, and your copy must not imply
+otherwise.** IRC does have a `DCC REJECT`; grappa deliberately does not
+emit one, because it would confirm to an unsolicited stranger both that the
+nick is online and that a human read their offer. Label the × with what it
+does — "ignore this offer" — never "tell them no".
+
+The file route always answers `application/octet-stream` +
+`Content-Disposition: attachment` + `nosniff`, for any file. These bytes
+came off a stranger's socket and the sender declared no MIME type at all,
+so **do not sniff, preview, inline or auto-open them** — hand the download
+to the browser.
+
+Check `protocol_version >= 21` before relying on the surface as a whole,
+and note that it is not one floor but three: the two event kinds landed at
+**19**, the `not_held` token at **20**, and the top-level
+`GET /dcc_files/:slug` door at **21** (issue 2127 — before that, fetching
+was `GET /networks/:network_id/dcc_files/:slug`, behind auth). So a v20
+server gives you the prompt and the consent verbs but NOT a link a browser
+tab can open, which is the half a client notices last.
+
+⚠️ This paragraph read *"20 is the floor for the surface as a whole"* until
+2026-09-18, in the same revision that added the v21 route move directly
+above it — the sentence was simply not revisited. A client that trusted it
+would have rendered 📥 links against a v20 server and collected 401s.
+
+### 4c. Standing consent for DCC, per network (issue 2143, v22)
+
+The prompt in §4b is the default, not the only mode. A per-`(subject,
+network)` opt-in lets the server accept an offer without asking, and it is
+off unless the operator turns it on:
+
+| route | answer |
+|---|---|
+| `GET /networks/:network_id/dcc-auto-accept` | 200 `{"enabled": true \| false}` |
+| `PUT /networks/:network_id/dcc-auto-accept` with `{"enabled": true \| false}` | 200 with the stored value |
+
+`enabled: true` does NOT mean "accept anything". It means *auto-accept from
+people I already talk to on this network* — the server still decides who
+qualifies, and an offer from a stranger keeps going through the consent
+prompt. So do not present the switch as "accept all files"; your copy has
+the same honesty problem the × button has in §4b.
+
+What changes for your event handling is less than it looks: an
+auto-accepted offer still emits `dcc_offer` followed by
+`dcc_offer_resolved` with `"accepted"`. There is no third resolution and no
+flag distinguishing "a human said yes" from "the setting said yes" — if you
+draw the banner on `dcc_offer` you may see it appear and resolve in one
+breath. Drive the UI off `dcc_offer_resolved` exactly as before.
+
+Check `protocol_version >= 22`. An older server 404s both routes, which is
+a fine "the feature is not here" signal.
+
+### 4d. The subject's remembered leave and away text (issue 2150, v23)
+
+Two user-topic pushes carry settings the operator edits elsewhere, so a
+second device learns about the change:
+
+```json
+{"kind": "quit_part_reason_changed", "quit_part_reason": "back later"}
+{"kind": "auto_away_reason_changed",  "auto_away_reason": null}
+```
+
+🔴 **The key is ALWAYS PRESENT and `null` is a MEANING, not an absence.**
+This is the one place in this document where the ordinary "absent key =
+default" reading is wrong. `null` is how *"I cleared it"* travels: for
+`quit_part_reason` it means QUIT falls back to its own
+`"user-disconnect"` and PART goes bare; for `auto_away_reason` it means
+the bouncer keeps its built-in text. A client that coalesces `null` into
+its last known value will show a reason the server will not send, and will
+never render a clear.
+
+Both are `string | null`. Check `protocol_version >= 23`.
+
+### 4d-bis. The auto-away nick rename (#1894, v32)
+
+A third user-topic push on the same axis, carrying the suffix the bouncer
+appends to the subject's nick while it holds them auto-away:
+
+```json
+{"kind": "away_nick_suffix_changed", "away_nick_suffix": "-away"}
+```
+
+Same always-present-key rule as the pair above, and `null` again means
+something rather than nothing — but a DIFFERENT something. For the two
+reasons `null` hides a server-owned string the client must not print. Here
+`null` hides nothing at all: the rename is OFF, the nick is left alone, and
+that is the default every subject has until they set a suffix.
+
+The rename rides auto-away only. An explicit `/away` never renames. On the
+way back the bouncer restores the nick it took; if the bare nick has since
+been taken it stays decorated and the refusal numeric routes to the
+subject, rather than a retry ladder running underneath them.
+
+A client MUST NOT derive the away nick itself. The server decides whether
+the rename happens at all — a target that would exceed the network's
+`NICKLEN` is skipped and the nick left alone — so a client that renders
+`nick + suffix` will show a nick nobody is using.
+
+`string | null`. Check `protocol_version >= 32`.
+
+### 4e. A network left or joined the session (issue 2219, v28)
+
+`DELETE /session/networks/:slug` detaches a network from the caller's own
+session: it parks and quits the network, then marks the binding detached.
+Everything the subject authored survives — nick, SASL user, the stored
+secrets, the perform list and the autojoin set — and `POST
+/session/networks` on the same slug brings all of it back. It is the
+inverse of the accretion verb, not a delete.
+
+204 on success. 404 covers both a slug this deployment does not carry and
+one the caller does not hold attached, deliberately: one answer for every
+reason, so the route cannot be used to enumerate networks. 403 for a
+visitor, whose identity lives on the credential.
+
+The detach is announced on the user topic:
+
+```json
+{"kind": "network_detached", "network_id": 7, "network_slug": "libera"}
+```
+
+🔴 **This is NOT a `connection_state_changed`, and it carries no state.**
+Detaching a network that was already parked moves no `connection_state` at
+all, so there is no transition to report. Re-read the two surfaces that
+own the answer instead: `GET /networks` for the sidebar and `GET /me` for
+the `$home` rows. Both stop returning the network, and every
+`/networks/:slug/...` route answers 404 for it from that moment — so a
+client still showing a `[Reconnect]` chip for it is one tap from a refusal.
+
+A detached network reappears in `home_data.available_networks`, whether or
+not the operator put it in the self-serve tier: your own detached binding
+is always re-attachable. One `POST /session/networks` with that slug
+restores the credential and spawns the session.
+
+The other direction has its own event, and you need it:
+
+```json
+{"kind": "network_attached", "network_id": 7, "network_slug": "libera"}
+```
+
+It fires whenever a network JOINS the session — a fresh accretion or the
+re-attach of something detached — for both subject kinds. 🔴 **Do not try
+to infer an attach from `connection_state_changed`.** That event fires on
+the `:parked → :connected` flip, but it describes a LINK and the
+attachment set is a different fact: a client that refreshes only its
+network list on it will keep showing the network under
+`available_networks` with no attached row. Re-read the same two surfaces
+this event's twin asks for.
+
+Neither event carries state, and that is the contract: they name what
+moved, and `GET /networks` plus `GET /me` own the answer.
+
+Check `protocol_version >= 28`. ⚠️ There is no 27 — the shape moved twice
+before this version was published, and the pin gate requires a number per
+move. Nothing ever spoke 27.
+
+### 4f. End-to-end encrypted queries — the relay half (issue 2430, v42; offline queue v43; key bundle v44; pacer and `expires_at` v46; network name v47; devices v49; copies to your other devices v50; NACK from `*` v52; a device's `last_seen_at` v56 and `inserted_at` v57; channel messages v63)
+
+An encrypted query is a conversation grappa carries and cannot read. The
+endpoints (cicchetto, or a bot using the shared Python package) run Olm via
+vodozemac; on IRC the traffic is CTCP inside PRIVMSG to the peer's nick,
+`\x01E2E <verb> <msgid> <i>/<n> <from> <to> <chunk>\x01`, in the format agreed
+on issue 2430 (wire v2, comments 6346236542, 6346384093 and 6346686730).
+**You never see those lines.** grappa parses them, reassembles the
+fragments, and hands you one event per whole message and device:
+
+```json
+{"kind": "e2e_message", "network": "azzurra", "id": 4711, "from": "vjt-claude",
+ "from_did": "AaZaARRDyBk", "to_did": "BoBBoBBoBBo", "verb": "pkmsg",
+ "msgid": "q83vEjRWeJA", "payload": "{\"v\":2,\"id\":{…},\"bodies\":{…}}",
+ "own": false, "channel": null}
+```
+
+`payload` is the compact JSON text the peer sent, as a string, exactly as
+the peer cut it, never parsed on the server. `verb` is one of `keys`,
+`pkmsg`, `msg`, `nack`. `from` is a routing hint only: pin the peer on its
+KEY, never its nick. `from_did` (v49) is the sending device, or `*` when
+the peer's grappa speaks for the whole user: on a `keys`, and (v52, issue
+2491) on a `nack` saying that a `pkmsg` or `msg` of yours reached NONE of
+the devices the peer lists. The device you wrote to was revoked, or the
+peer started over with a new identity or moved to another server, or
+someone else holds the nick now. Its payload is any NACK's,
+`{"ref": <msgid>, "v": 2}`. Tell your user that the peer cannot read that
+message, and do NOT re-key on your own: the nick's new holder may be an
+impostor. Let the user decide whether to ask for keys again, then take
+the KEYS as any key change (trust on first use, the key alarm, SAS).
+`to_did` (v49) is the device of YOURS this copy is for. `own` (v50) is
+`false` on every message from a peer and `true` on a copy of a message one
+of YOUR other devices sent (see *Copies to your other devices* below): show
+it as sent, not received. `channel` (v63) is the folded channel name the
+message was sent to, or `null` for a direct message (see *Channel
+messages* below): show the message in that channel, not in a query. A server predating v63 omits the key entirely — read that as a DM.
+
+**One identity, several devices (v49).** A subject holds one E2E identity
+per network: a master Ed25519 key, and up to **4** devices it vouches for.
+Each device registers its id block, and the master puts the signed list of
+the devices it vouches for. grappa routes only to LISTED devices and sends
+only from them:
+
+| route | answer |
+|---|---|
+| `POST /networks/:network_id/e2e/devices` `{"ed25519", "curve25519", "sig"}` | **200** the device: `{"did", "ed25519", "curve25519", "sig", "last_seen_at", "inserted_at"}`. Registering the same `ed25519` again replaces its id block and stays one device, with its first `inserted_at` |
+| `GET /networks/:network_id/e2e/devices` | **200** `{"devices": [device…]}`, oldest first, listed or not. `last_seen_at` (protocol 56, issue 2547) is when that device last read its own inbox (`GET …/devices/:did/inbox`), ISO 8601, moved at most once a minute; `null` for a device that has not read it since grappa records it, and absent from a server older than 56. `inserted_at` (protocol 57, issue 2544) is when grappa first registered the device, ISO 8601 to the second, kept when it registers again; absent from a server older than 57 |
+| `DELETE /networks/:network_id/e2e/devices/:did` | **204** — a device the list does NOT name (a pairing that never finished) is dropped with its keys and queue, freeing its room; 404 `not_found` for a `did` that is not yours there, 409 `listed_device` for one the list names (that one goes with a list that leaves it out) |
+| `PUT /networks/:network_id/e2e/list` `{"master", "ver", "devices", "sig"}` | **200** the list as held |
+| `GET /networks/:network_id/e2e/list` | **200** the list; 404 `not_found` before one is put |
+| `DELETE /networks/:network_id/e2e/keys` | **204** — the whole identity is dropped: every device with its keys and queue, and the list. Do this when the account starts over with a new master, so no peer is handed a key of the old one |
+
+Keys and signatures are vodozemac's `to_base64()` (standard, unpadded: 43
+characters a key, 86 a signature). A device's `sig` is its own signature
+over `"irc-e2e:v2:id:" + curve25519 + ":" + master`. The `did` is grappa's,
+derived from `ed25519`, never yours to choose: the first 8 bytes of the
+SHA-256 of the raw key, **base64url** (RFC 4648 §5: `-` and `_` where the
+standard alphabet has `+` and `/`) unpadded, 11 characters. The device
+names it as its `from` and in its own routes below, where it goes into the
+path as it is. Keys and signatures stay standard base64; only the `did` is
+URL-safe. Two vectors: the RFC 8032 test-1 key
+`11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo` has the `did` `If4x36FUomE`,
+and `7l01yXGoarYtEU3nwHF01/CIo8/r8U0lJ01TnULT9IY` has `_Uw_z3-OAsk`. The list's `devices` are the
+devices' `ed25519` keys, 1 to 3, sorted strictly ascending (plain string
+order), and its `sig` is the master's signature over
+`"irc-e2e:v2:list:" + ver + ":" +` those keys joined by `","` (`ver` in
+decimal, 1 to 2³¹−1). Three is the most an identity holds (issue 2576); a
+list of 4 put before that is still served, and a peer still takes a list
+or a message naming up to 4 devices, which is the wire's own limit.
+
+grappa decides no trust, and verifies exactly one signature: the list's. A
+list must also name only registered devices and raise `ver` above the held
+one; a device the held list names and the new one does not is REVOKED, and
+grappa forgets it with everything stored for it. A device registered and
+not listed yet (one being paired) is left alone, but nothing is routed to
+it and it cannot send. 400 `bad_request` for an id block or a list that is
+malformed, or a list whose signature does not verify; 409
+`too_many_devices` for a fourth device (drop an unlisted one first); 409
+`master_mismatch` for a list under another master (start over with
+`DELETE …/e2e/keys`); 409 `stale_list` when `ver` does not rise, except
+that the very list held, put again, answers 200 and changes nothing (a
+retried put is safe); 422 `unknown_device` for a list naming a key no
+device of yours registered there. Either way nothing changes.
+
+`id` (v43) names the entry in the **offline queue** of the device in
+`to_did`. Every whole message from a peer is queued before it is pushed,
+connected or not: in the queue of the device its frame names, or of every
+listed device when it names `*` (such a message carries one encrypted body
+per device; decrypt only yours). It stays there until that device
+acknowledges it or it expires:
+
+| route | answer |
+|---|---|
+| `GET /networks/:network_id/e2e/devices/:did/inbox?after=<id>` | **200** `{"messages": [e2e_message…]}` — oldest first, at most 100; page with the last `id` you got (`after` absent = from the start). The read marks the device active: its `last_seen_at` |
+| `POST /networks/:network_id/e2e/devices/:did/inbox/ack` `{"ids": [<id>…]}` | **204** — those entries of that device are deleted; idempotent, and an id of another device is skipped; 1 to 100 positive integers, else 400 `bad_request` |
+
+Both 404 `not_found` for a `did` that is not one of your devices there.
+
+🔴 **Delivery is AT LEAST ONCE: dedupe by `id`.** On connect, drain your
+device's inbox page by page; keep handling `e2e_message` pushes as they
+come, and skip the ones whose `to_did` is not yours (the push goes to every
+client of the account). The same entry can reach you both ways, and again
+after a lost ack. `id` is never reused, so it tells a repeat from a new
+message. Ack an entry once you have processed it, including one you could
+not decrypt (after you have NACKed it): an unacked entry stays until it
+expires.
+
+What the queue holds is ciphertext; grappa holds no key. An E2E line is
+still never stored anywhere else — not in scrollback, not in search, not in
+a push payload — so `GET …/messages` will never return one. Keep your own
+decrypted copy if you want history; that is the design.
+
+The queue is bounded per device: an entry expires **7 days** after it
+arrived, and one nick cannot hold more than 1 MiB of a device's queue
+(4 MiB in total, each entry charged its payload plus 256 bytes). A message
+that does not fit is not queued and not pushed for that device. For both,
+YOU are told — the sender never is, by ruling: once an hour grappa writes
+one row per peer and device into that peer's query window (opening it), a
+`server_event` with no body, `meta.e2e_undeliverable` = how many messages
+from that peer the device will never read, and `meta.e2e_device` (v49) =
+that device's `did`. Only `pkmsg` and `msg` are counted; key material and
+NACKs expire, or are refused, silently. Because a refused message is never
+pushed either, a device that never acks stops receiving a peer's messages
+once that peer's share is full. Every device of the account sees every
+device's row, so tell your own `did` from a sibling's: cicchetto words its
+own device's row (and a row without `e2e_device`, written before v49) "***
+<peer> sent you N encrypted messages that cannot be read here", and a
+sibling's "… that cannot be read on your device <did>".
+
+A queued `pkmsg` or `msg` also raises a Web Push notification, once per
+message however many devices it was queued for, under the same
+private-message preferences and mute as a DM: the title is the peer's nick,
+the body "encrypted message", nothing else. A copy of your own message
+(`own: true`) never does. Its `url` is the deep link a DM from that nick
+carries plus `&e2e=1` (`/?network=<slug>&channel=<nick>&e2e=1`): open the
+end-to-end encrypted conversation with the nick, not the plaintext one
+(issue 2515). Its `tag` is `<slug>:e2e:<nick>`, so it stacks apart from the
+plaintext DM banner from the same nick. A client that ignores `e2e` opens
+the plaintext conversation, as before. The payload's shape did not change
+and nothing on the WebSocket moved, so `protocol_version` did not either.
+
+Sending:
+
+| route | answer |
+|---|---|
+| `POST /networks/:network_id/e2e/messages` `{"target", "verb", "from", "to", "payload", "priority"?, "expires_at"?}` | **202** `{"msgid": "…"}` — accepted, not delivered |
+
+`target` is a nick, or for `:msg` a channel (see *Channel messages*
+below); `verb` is `keyreq`, `pkmsg`, `msg` or `nack` (lowercase);
+`from` is the sending device's `did`, and must be LISTED; `to` is the
+peer's device or `*`, in the combinations the frame allows: `keyreq` goes
+to `*`, `pkmsg` and `msg` to one device or to `*` (one message, one body per
+device), `nack` to one device. For a channel `:msg`, `to` is always `*`:
+the frame has no single recipient device. The four consent verbs of v53 (`REQUEST`,
+`ACCEPT`, `REFUSE`, `CANCEL`) do not go through this door: they move a
+request, and the requests resource sends them (§4i). `payload` is the
+compact JSON text you built
+(printable ASCII, no space: there is no outer base64 any more). grappa picks
+the msgid (a peer's `NACK` names it), cuts the lines against the worst-case
+relayed prefix, and paces them by two rules from bahamut's source:
+
+- **at most 3 lines per 6 s per recipient**. bahamut blocks every CTCP to a
+  client that receives more than 4 in 3 s, for 15 s, silently;
+- **never past the connection's fake-lag ceiling**. bahamut charges each
+  line `2 + len/120` s, stops PARSING a client at 10 s of debt while it
+  keeps reading the socket, and disconnects one whose unparsed backlog
+  passes 2560 bytes. Everything the
+  connection sends counts, your own messages included. A full line costs
+  5 s, so a long message drips at about one line per 5 s: a 64-line message
+  takes about five minutes. That is accepted by ruling, and receivers wait
+  60 s from a message's LAST line, not its first.
+
+An optional `"priority"` field takes `"control"`, `"reactive"` or `"text"`;
+absent means `"text"`. grappa cannot see inside a `msg`/`pkmsg`, so set
+`"control"` on the one that carries a CHAL or an ACK, and `"reactive"` (v49)
+on one that carries the device list a peer asked for (`t:list`,
+`t:listreq`). Each message then waits in one of three lanes:
+
+- **urgent**: `keyreq` whatever the field says, and a `"control"`
+  `msg`/`pkmsg`. Ahead of text, within 36 s of fake-lag bank per minute for
+  the whole connection; one urgent message goes at a time, whole;
+- **reactive**: `nack` whatever the field says, a `"reactive"`
+  `msg`/`pkmsg`, and grappa's own KEYS answers (below). Ahead of text,
+  within 18 s per peer and 22 s for the connection per minute, both raised
+  to a KEYS's own cost for that KEYS (one covers every device of the user,
+  so four devices cost more than 22 s); in order per peer, but lines to
+  different peers may interleave;
+- **text**: every other `msg`/`pkmsg`. One text message goes at a time,
+  whole, and text to one peer never reorders, so the peer never displays two
+  messages backwards.
+
+Past its budget a message waits behind text, and still goes whenever no
+text can. Text never starves either: after 20 s without a text line, the
+text message under way goes next, right after an urgent message already
+under way. A peer that drew nothing else in the last
+minute may go a little past the budget, so a first contact is not stuck
+behind a flooder. Peers are served in turn, whoever was served longest ago
+first, and 5 s of the bank is kept for urgent lines. The full rule is
+irc-olm's, which grappa follows to the letter.
+
+**An order's deadline (v46).** On a `"control"` `msg`/`pkmsg`, an optional
+`"expires_at"` is the deadline of the order it answers, in unix seconds:
+the CHAL's own `expires_at`, whatever life the bot gave it: grappa holds no
+window of its own (issue 2575). grappa starts the message only if its last line
+can leave 2 s before that instant, so your ACK can still reach the bot in
+time; one that waits past that point is dropped unsent, and you are told
+(`e2e_send_dropped`, below). The deadline is read against grappa's clock,
+with no allowance for skew: either way a skewed clock fails closed, the
+order going unconfirmed. Anywhere else, or not a positive integer,
+`expires_at` is a 400. Before 46 a server ignores the field, so check
+`protocol_version >= 46` before relying on it.
+
+**The network an order names (v47).** A CHAL's `network` is the bot's own
+005 `NETWORK=` token, not grappa's slug. `isupport_changed` carries the same
+token as `network`, as advertised and undecoded (do not unescape `\xHH`), or
+`null` when the network advertised none (or the server predates 47, where the
+key is absent). Compare the two exactly
+before you ACK, and answer nothing when yours is `null`: with nothing to
+compare, an ACK could confirm an order seen on another network where
+someone else wears your nick.
+
+What may wait is bounded: per peer, 32 text MESSAGES (counting the
+`msg`/`pkmsg` refused or dropped behind queued text, each of which leaves the
+receiver a message key to skip) and 32 lines in each of the urgent and
+reactive lanes; on the whole connection, 480 s of text and 128 urgent and
+reactive lines (text does not count against those, so your own text never
+leaves an order unanswerable). A
+message that would pass any of these is refused WHOLE with the 429 below,
+and nothing of it is sent: tell your user, or hold it and try again later
+(vjt's ruling: refused, never silently dropped). So 202 means accepted:
+lines may still be waiting when it returns, and IRC never tells anyone a
+message was delivered.
+
+What grappa accepted and then dropped unsent is announced on the user topic
+(v46), with the msgid the 202 gave you:
+
+```json
+{"kind": "e2e_send_dropped", "network": "azzurra", "target": "vjt-claude",
+ "msgid": "Zm9vYmFyMDE", "reason": "late"}
+```
+
+`reason` is `late` (an order's answer that could no longer make its
+`expires_at`), `send_failed` (one of its lines failed to reach the socket,
+and the receiver could never complete the message, so the rest of it was
+not sent) or `session_ended` (the session stopped, an upstream drop, a
+disconnect or a restart, with the message still waiting). Nothing is
+dropped for a bound once accepted: a message fits whole at the door or is
+refused there. When a message's first line fails at once, the push can
+reach you before the 202 does: match it by msgid whenever it comes.
+
+400 `bad_request` for a target that is not a nick (or, for `:msg`, a
+channel — a channel target with any other verb, a `to` other than `*`, or
+a channel you are not a member of), an unknown verb or priority,
+addresses the verb may not carry, a payload that is not compact JSON text,
+or an `expires_at` out of place; 400 `invalid_line` for a CR, LF or NUL in
+`target`; 422 `unknown_device` when `from` is not a listed device of yours
+(v49); 413 `too_large` for a payload over 32 KiB (what a receiver buffers
+per sender, so it could never be reassembled) or one that needs more than
+64 lines; 422 `too_late` when `expires_at` can already no longer be met;
+429 `rate_limited` when the peer's or the connection's queue cannot take
+the whole message, or for a `keyreq` while a KEYS from that peer is still
+arriving (asking again then only doubles its cost); 404 `not_found` with no
+session on the network; 502 `upstream_unreachable` while the upstream link
+is down; 504 `session_timeout` if the session does not answer.
+
+**Channel messages (v63).** One encrypted message, sent ONCE as a PRIVMSG
+to the channel — IRC multicast does the fan-out for free, so a channel
+message costs one line, not one per member. The frame is the same CTCP
+shape, with the channel as its target and `to` always `*`:
+
+`\x01E2E msg <msgid> <i>/<n> <from> * <chunk>\x01`
+
+and the payload is the v3 group shape, one sender key per sender
+(Megolm-style), not one global key:
+
+```json
+{"v": 3, "ch": "#grappa", "sid": "<session id>", "i": 0, "body": "<Megolm ciphertext, base64 unpadded>"}
+```
+
+`ch` is the folded channel name, `sid` the group session id, `i` the
+chain index, `body` the ciphertext. A long message chunks `i/n` as a DM
+does, and receivers wait 60 s from its LAST line. A channel line whose
+frame names a device instead of `*` is dropped as malformed — the
+channel frame has no single recipient. grappa reassembles the
+same multicast independently for every member and queues the whole message
+into every listed device's inbox, with `channel` set — so `e2e_message`
+carries the channel and the offline queue stays per-device (7 days, 1 MiB
+per sender-nick share). A channel message that reaches no listed device is
+NACKed to the sender, as a DM, as for a DM. The pacer treats the channel
+as one recipient: one lane per channel, the same budgets. `e2e_incoming`
+and `e2e_incoming_lost` (§4l) name no channel in v63 — correlate them with
+the delivered message by `msgid`, which is unique per message. And a
+channel E2E line is never stored anywhere else, exactly as a DM line is
+not: no scrollback, no search, no push payload.
+
+The key never touches the server, and there is no endpoint that serves it:
+an endpoint serving the channel key kills the E2E. The key travels
+encrypted inside the existing pairwise Olm DM between two members — that
+DM is the invite and the bootstrap — as a `msg` whose payload is
+`{"t": "gkey", "ch": "#grappa", "sid": "…", "key": "…"}`. On JOIN, one
+member sends the current epoch key to the newcomer in one pairwise
+message. On PART or KICK the key rotates, mandatorily: the new key is
+distributed pairwise to ALL REMAINING members (one-time, O(n)) — you
+cannot encrypt the new key under the old key and post it in the channel,
+the departed member holds the old key. Rotation is periodic too: one
+channel message carrying the new key encrypted under the old key, which
+costs nothing — daily is fine. A departed member keeps the old key: they
+can re-read what they already received, nothing after. Rotation is only
+real if clients DELETE old keys. Membership on the IRC channel IS key
+access: grappa never sees the key and has no authorisation endpoint, and
+a member who leaks it reads the current epoch — that is unsolvable by
+crypto, and accepted. Forward secrecy is bounded, not true: epoch rotation
+plus a one-way hash-chain ratchet bounds exposure to the compromised epoch;
+true forward secrecy and post-compromise security need MLS (RFC 9420,
+TreeKEM), for which this stack has no ready library. Check
+`protocol_version >= 62` before offering channel E2E: below it the door
+answers 400 on a channel target, and `e2e_message` carries no `channel`.
+
+**Your key bundle (v44, per device since v49).** A `KEYREQ` addressed to
+you is never delivered as an event: grappa answers it itself, connected
+client or not, from the keys your devices upload. Each device uploads its
+own:
+
+| route | answer |
+|---|---|
+| `POST /networks/:network_id/e2e/devices/:did/keys` `{"one_time_keys": [{"key", "sig"}…], "fallback": {"key", "sig"}}` | **200** `{"one_time_keys": N, "fallback": true\|false}` — one-time keys are ADDED, each once (one already held is skipped, so retrying an upload is safe); a fallback key REPLACES the one held; either field may be absent or `null`, not both |
+| `GET /networks/:network_id/e2e/devices/:did/keys` | **200** the same `{one_time_keys, fallback}`: what that device has left to hand out |
+
+`key` is a Curve25519 key and `sig` the device's signature over
+`"irc-e2e:v1:otk:" + key`. When a peer asks, grappa composes ONE KEYS for
+the whole user, from `*` to the asking device: your signed list, then, for
+each listed device that still has a key, its id block and one key — its
+OLDEST one-time key, deleted as it goes out so each goes out once, or its
+fallback key once none is left, which stays. A device with no key at all is
+left out of the answer, so unreachable for now. **Replenish when
+`one_time_keys` runs low**: on connect, and after a `pkmsg` reaches you
+(each one used up a one-time key). The keys themselves never come back out
+of grappa.
+
+Answers are rate-limited, so a stranger can only slowly drain your bundle,
+and cannot use it to starve your connection: per nick (case-folded), one
+answer per 15 s, and one-time keys at most once a minute (else fallback
+keys); per connection, at most 30 answers with one-time keys an hour, one
+key per listed device in each (someone cycling nicks can still take those
+30, so keep the bundles topped up), and answers spend at most 22 s of
+fake-lag bank in any 60 s, except that a minute with nothing spent lets
+one answer through whatever it costs (a KEYS for four devices costs more
+than 22 s on its own); and no second KEYS to a nick starts while one to it
+is still going out. A request past a limit, or
+with no list or no key, goes unanswered; the peer asks again later. The
+answer waits in the reactive lane. The 22 s are on top of that lane's
+budget, not instead of it: the lane ranks a KEYS ahead of text only within
+its budget, and behind it past that, but never refuses one, while the
+connection's 128 urgent and reactive lines are shared with your own orders
+and NACKs. Without the 22 s, four nicks asking every 15 s could fill them
+with answers (each peer's reactive lane holds 32 lines), and every order you
+answer would be refused.
+
+A device's bundle holds at most 50 one-time keys and one fallback key. 400
+`bad_request` for an upload with nothing in it, a field of the wrong type,
+or an entry that is not a key and a signature; 404 `not_found` for a `did`
+that is not one of your devices there; 413 `too_large` when the bundle
+would pass 50 one-time keys. Either way nothing is stored.
+
+**Copies to your other devices (v50).** What one of your devices sends a
+peer, your other listed devices (its siblings) should show too. IRC cannot
+carry that: a device never asks your own nick for keys, nor sends to it. So
+two doors act only inside your own account, never on IRC:
+
+| route | answer |
+|---|---|
+| `POST /networks/:network_id/e2e/devices/:did/claim` `{"from_did"}` | **200** `{"keys": "…"}` — one key of your sibling `did`, for your device `from_did` to open an Olm session to it: the KEYS v2 text a peer's KEYREQ is answered with, restricted to that one device (your signed list, its id block, and its oldest one-time key, or its fallback key once none is left). The key is consumed as on a KEYREQ |
+| `POST /networks/:network_id/e2e/devices/:did/copies` `{"from_did", "verb", "payload"}` | **202** `{"id": <id>, "msgid": "…"}` — a copy of a message `from_did` sent, queued in the inbox of your sibling `did` and pushed as an `e2e_message` with `own: true`, `from` your nick at send time and `from_did` the sending device. `id` is its queue id there, `msgid` one grappa picked |
+
+`verb` is `pkmsg` or `msg`, spelled as on the send door; `payload` is the
+compact JSON text your sending device encrypted to the sibling, on the
+session it holds to it (the one a claim opened, or the one the sibling
+opened when it copied to you first), never the ciphertext the peer got. Copy a message
+only once grappa accepted it (the send door's 202): one that never left has
+nothing to copy. grappa fills these doors only for your own account, and is
+still not trusted for content: drop an `own` copy whose sending device is not
+on your own signed list, or whose signature does not verify. One whose
+certificate your master signed for a list version past the one you hold
+comes from a device paired since you read your list: take the newer list
+(`GET /networks/:network_id/e2e/list`) and read the copy again before you
+drop it, or that device's first copies are lost.
+
+A copy waits in the sibling's queue like a peer's message, with three
+differences:
+
+- **one share**: every copy of your account in one device's queue counts as
+  ONE sender, so together they hold at most 1 MiB of it, whatever nick they
+  went out under; a peer's share and yours never eat each other, and both
+  count toward the 4 MiB;
+- **silent expiry**: a copy that waits past the 7 days goes with no
+  undeliverable row and no notice;
+- **no push**: a copy raises no Web Push notification.
+
+A copy the sibling's queue cannot take is answered 413 `inbox_full`, and is
+then simply MISSING on that device: nobody is told later, and you need not
+retry.
+A new device starts empty: copies apply from its pairing onward, with no
+backfill.
+
+Claim: 400 `bad_request` without a `from_did`; 404 `not_found` for a `did`
+your list does not name; 409 `same_device` for your own `did`, 409
+`keyless_device` when that device holds no key at all (unreachable until it
+uploads more), 409 `key_taken` when its key was taken between grappa's pick
+and the hand-out (ask again); 422 `unknown_device` when `from_did` is not
+listed; 503 `db_unavailable` when the database stays busy.
+
+Copy: 400 `bad_request` for another verb, a payload that is not compact JSON
+text, or a missing field; 404 `not_found` for a `did` your list does not
+name, or with no session on the network (as on the send door); 409
+`same_device` when `did` is `from_did`, 409 `removed_device` when that device
+was dropped meanwhile; 413 `too_large` for a payload over 32 KiB, 413
+`inbox_full` as above; 422 `unknown_device` when `from_did` is not listed;
+503 `db_unavailable` when the database stays busy; 504 `session_timeout` if
+the session does not answer.
+
+Check `protocol_version >= 42`, `>= 43` for the offline queue and `id`,
+`>= 44` for the key bundle, `>= 46` for `expires_at`, `too_late` and
+`e2e_send_dropped`, `>= 47` for `network` on `isupport_changed`, `>= 49`
+for devices, and `>= 50` for the claim and copy doors and `own`: every
+route and field above that names one. A server between 42 and 47 speaks the
+v1 frame and the per-account shape, which no release ever carried; a v49
+client does not talk E2E to it.
+
+### 4g. Pairing two devices of one account — the relay (issue 2430, v48)
+
+A second device joins the account's end-to-end identity by pairing with a
+device that already holds it. grappa relays the pairing channel blind: the
+two devices encrypt it between themselves (vodozemac's ECIES, the MSC4108
+shape), and the 2-digit check code both screens show is what defeats a
+relay in the middle. Every payload is an opaque base64 string to grappa.
+
+**The code.** A pairing's code is the rendezvous id and the creating
+device's ephemeral Curve25519 key. The id is 22 characters of url-safe
+base64; the key is 43 characters of standard base64. Both are public. How
+the code reaches the other device is the client's business, and cicchetto
+sends it only through the offer below (issue 2549). It used to put
+`https://<host>/pair#pair=<rendezvous id>.<key>` in a QR code and a link,
+and stopped: a link opens in the system browser rather than an installed
+app, so it paired a browser nobody meant to pair, and iOS cannot route a
+link into an installed web app.
+
+**The sides.** A side is the auth session (bearer) of one device: the
+creator's at open, the joiner's at join. A rendezvous belongs to one
+account; to any other it does not exist (404). The joiner speaks first
+(the ECIES outbound side), then either side posts in any order, until one
+closes it. It lives 300 s, takes one joiner, at most 16 KiB per message
+and 64 KiB or 64 messages in all. One account holds one live rendezvous:
+opening a second closes the first (`replaced`). Opens are rate limited per
+account (429 `rate_limited`). The routes take a full session: a per-client
+token gets 403 `client_token_scope`, an incognito visitor 403 `forbidden`.
+
+| Request | Answer |
+|---|---|
+| `POST /e2e/pairings` `{curve}` (optional, v55) | 201 `{rendezvous: {id, role: "creator", expires_at}}`; with `curve`, the rendezvous is offered (below); 422 for a `curve` that is not 43 characters of standard base64 |
+| `GET /e2e/pairings/offer` (v55) | 200 `{offer: {rendezvous_id, curve, expires_at}}`, or `{offer: null}`: the account's offered rendezvous |
+| `POST /e2e/pairings/:id/join` | 200 `{rendezvous: {id, role: "joiner", expires_at}}`; 409 `pairing_already_joined` to a second joiner, 409 `pairing_own_rendezvous` to the creating device |
+| `POST /e2e/pairings/:id/messages` `{payload}` | 201 `{message: {seq, from, payload}}`; 409 `pairing_not_joined` to a creator before anyone joined; 413 `pairing_full`; 422 for a payload that is not base64 or passes 16 KiB |
+| `GET /e2e/pairings/:id/messages?after=<seq>` | 200 `{messages: [{seq, from, payload}…]}`: what the OTHER side posted after `seq`, oldest first |
+| `DELETE /e2e/pairings/:id` | 204, for both sides |
+
+A third device of the same account gets 403 `pairing_not_a_party` on the
+last three. `expires_at` is ISO-8601; `seq` counts both sides' messages
+from 1.
+
+**The pushes.** On the user topic, to every device of the account:
+
+```json
+{"kind": "e2e_pairing_message", "rendezvous_id": "…", "seq": 3, "from": "joiner"}
+{"kind": "e2e_pairing_closed", "rendezvous_id": "…", "reason": "closed"}
+```
+
+`e2e_pairing_message` carries no payload, on purpose: the push reaches
+every device of the account, and the fetch above answers the two sides
+alone. On the push, fetch `after` the last `seq` you delivered. A push is
+not replayed, so fetch also once as you open the channel (the other side
+may answer between your join and your subscribe) and again after every
+reconnect: in a handshake each side waits for the other, and a lost
+doorbell otherwise waits out the 300 s. A fetch answered 404 means the
+rendezvous ended while you missed the push saying so. `reason` is
+`closed` (a side closed it), `expired` or `replaced`.
+
+Check `protocol_version >= 48`.
+
+**The offer (issue 2537, v55).** A creator may send its ephemeral key as
+`curve` when it opens: then the rendezvous is OFFERED to the account's
+other devices, the code pushed on the user topic:
+
+```json
+{"kind": "e2e_pairing_offered", "rendezvous_id": "…", "curve": "…", "expires_at": "…"}
+```
+
+It is pushed once, at the open, and again in every user-topic join
+snapshot while nobody has joined, so a device that logs in meanwhile gets
+it too; `GET /e2e/pairings/offer` answers the same for a client that is not
+on the socket. Joining is the ordinary `POST …/join` with the pushed
+`rendezvous_id`, and the channel runs with the pushed `curve`. The offer is gone at the first `e2e_pairing_message`
+(someone joined), at `e2e_pairing_closed`, and at `expires_at`. Ignore an
+offer whose `curve` is your own, and one your device has no use for (it
+already holds the identity on every network). cicchetto shows a banner and
+joins only when the user says so, never on its own: a rendezvous takes ONE
+joiner, so every eligible device joining by itself would race, and the
+winner could be a tab nobody is looking at. Check `protocol_version >= 55`;
+an older server ignores `curve` and offers nothing.
+
+**What cicchetto puts on the channel (issue 2430, X1-crypto; no wire
+change, protocol stays 49).** grappa never reads this, and a client
+that wants to pair with cic needs it. Direction: the device that holds
+the identity opens the rendezvous and offers it (the ECIES inbound side);
+the new device joins the offer (the outbound side), and posts first.
+
+- **ECIES.** Both sides build vodozemac's `Ecies::with_info` with the
+  info string `irc-e2e:v2:pair` and the digit mode `AllowLeadingZero`
+  (MSC4108). The check code is the 2-digit number both ends derive,
+  always shown as two digits (`07`, never `7`). The new device shows it;
+  the holder's user types it on the holder, and the holder compares it
+  with its own before it sends anything else.
+- **Payloads.** The joiner's first payload is vodozemac's
+  `InitialMessage.encode()` (`ciphertext|key`), which carries a `|` the
+  relay refuses, so it travels as base64url of its UTF-8, unpadded. Every
+  later payload, in both directions, is `Message.encode()` as it is
+  (unpadded standard base64).
+- **Plaintexts.** Compact JSON with `"v":1` and a `"t"` kind. A `network`
+  is the network SLUG. An unknown `t`, a `v` other than 1, or a missing or
+  ill-typed field ends the pairing as failed; unknown extra fields are
+  ignored. Five kinds, in this order:
+
+| From | `t` | Body (besides `v`, `t`) | When |
+|---|---|---|---|
+| joiner | `hello` | none | the initial plaintext |
+| holder | `offer` | `networks: [{network, master}]`, `full: [network…]` | after the typed code matched. `master` is the master Ed25519 key. `full` lists networks whose list already holds 3 devices or more; they are not offered |
+| joiner | `join` | `devices: [{network, id: {curve25519, ed25519, sig}}]`, `skipped: [{network, reason}]` | after the user taps "Pair this browser". `sig` is the device's own Ed25519 signature (S1, §4f) over `irc-e2e:v2:id:<curve25519>:<master>`, `master` being the offered master key |
+| holder | `signed` | `devices: [{network, cert, list: {ver, devices, sig}}]`, `refused: [{network, reason}]` | `list` is the master's signed list with the device added: `devices` sorted ascending, `sig` the list signature of §4f. `cert` is the device's certificate: the master's Ed25519 signature over `irc-e2e:v2:dev:<ver>:<ed25519>`, where `<ver>` is the `ver` of the `list` in the same entry and `<ed25519>` the device's key (`docs/DESIGN_NOTES.md` #2430k) |
+| joiner | `done` | `paired: [network…]` | after it verified and kept what `signed` carried; `paired` names the networks where it took its place, and a network the holder added that `paired` leaves out is reported failed by the holder; then the HOLDER closes the rendezvous |
+
+`reason` is one of `full`, `paired` (the device is already listed under
+that master), `list-changed` (the holder's list moved while it signed)
+or `failed`. The channel carries public keys and signatures only: no
+pins, verifications or history travel, and the new device starts with
+none. One `offer` or `signed` must stay under the relay's 16 KiB per
+message, which is about 25 networks per pairing. Nothing is signed
+before both sides confirmed: the holder by typing the code, the joiner by
+its tap. A holder with no network to offer sends no `offer` and closes
+the rendezvous; a joiner treats an `offer` with no network as nothing to
+pair.
+
+### 4h. An inbound INVITE raises a Web Push notification (issue 2487)
+
+An INVITE that opens an `:invited` window — the first `window_invited` for
+that channel — also raises a Web Push notification, unless the invited
+channel is muted in `notification_prefs.muted_targets` (keyed like every
+other channel mute, network included). No other preference gates it. An
+INVITE that opens no window raises none: one from a user you `/ignore` (it
+disappears entirely, §8c), to a channel you are already in
+or joining, the ChanServ relay of an invite you asked for, one past the
+invited-window ceiling, or a repeat INVITE to a window still waiting on an
+answer (its `window_invited` re-affirms the banner; declining clears it, so
+the next invite pushes again). The usual foreground rule applies: while one of
+your devices reports the app on screen, the push is withheld and the
+banner is the notification.
+
+The payload is the ordinary one: title `"<inviter> is inviting you to
+<channel>"`, body `"on <network>"`, no `badge`, and the `tag` and `url` a
+message in that channel would carry. A service worker needs no change.
+Nothing on the WebSocket moved, so `protocol_version` did not either.
+
+### 4i. Asking a peer to start an encrypted chat (issue 2486, v53)
+
+Until v53 an encrypted query started with a key fetch and nothing before
+it: the peer learned of it from the first encrypted message. v53 puts an
+ASKING in front, and grappa holds it, so neither user has to be online
+when the other acts: a peer can accept while the requester's browser is
+closed, and the requester finds the answer when it comes back.
+
+The asking is CONSENT, not trust. Accepting says the user is willing to
+talk encrypted with that nick; the keys still come the usual way (the
+client sends a `keyreq`, §4f) and are pinned and checked as any key is
+(trust on first use, the key-change alarm, the SAS). grappa never sends a
+`KEYREQ` for anyone.
+
+**On IRC.** Four verbs in the §4f frame, from a device to `*` (the
+user): consent belongs to the person, and the asker does not know the
+peer's devices yet. The one other addressing is grappa's own: when it
+answers for the user, `ACCEPT` and `REFUSE` go from `*` to the device
+that asked (see *Crossings*, and a refuse without a body below).
+
+| verb | means |
+|---|---|
+| `REQUEST` | "I would like to start an encrypted chat" |
+| `ACCEPT` | yes, to the peer's `REQUEST` |
+| `REFUSE` | no, to the peer's `REQUEST` |
+| `CANCEL` | "I no longer ask" |
+
+The payload is compact JSON text of at most 1 KiB, opaque to grappa
+(cicchetto sends `{"v":2,"master":"<its master key>"}`, a hint, never a
+proof). grappa reads the VERB alone. A consent line is never queued in a
+device's inbox and never pushed as `e2e_message`: it moves the request
+below, and that is all it does.
+
+**The request.** One per peer and network, whoever asked; the peer is a
+nick, folded like every nick key.
+
+```json
+{"id": 12, "peer": "alice", "state": "incoming", "payload": "{\"v\":2,…}",
+ "at": "2026-11-01T14:00:00Z", "expires_at": "2026-11-02T14:00:00Z"}
+```
+
+| `state` | means | `payload` |
+|---|---|---|
+| `incoming` | the peer asked you, and waits for your answer | theirs |
+| `outgoing` | you asked the peer | `null`: grappa keeps no copy of what you sent |
+| `accepted` / `refused` | the peer's answer to your asking | theirs |
+| `expired` | your `outgoing` request passed its deadline unanswered | `null` |
+
+`at` is when the request entered its state; `expires_at` is 24 h after
+that on a pending request (`incoming`, `outgoing`, `expired`) and `null` on
+an answer. **`expired` is derived, never stored**: no timer has to fire for
+it to be right, and it stays until you ask again or dismiss it. An
+`incoming` request past its deadline is no longer listed, and grappa
+withdraws it within the hour (`e2e_request_gone`); hide it yourself at
+`expires_at`. An answer (`accepted`, `refused`) has no deadline: it waits
+until a client dismisses it, because an offline requester must still see
+it.
+
+**The routes.**
+
+| route | answer |
+|---|---|
+| `GET /networks/:network_id/e2e/requests` | **200** `{"requests": [request…]}`, oldest first, as of now. A read of the table: it answers with no session too |
+| `POST /networks/:network_id/e2e/requests` `{"target", "from", "payload"}` | **202** `{"request": request}`. `REQUEST` goes to `target`, and the request reads `outgoing` with a fresh 24 h deadline (asking again, after an expiry or after a refusal is a new request). When `target`'s own request is waiting, `ACCEPT` goes instead and the request reads `accepted` (see *Crossings*) |
+| `POST /networks/:network_id/e2e/requests/:id/accept` `{"from", "payload"}` | **202** `{"msgid": "…"}`. `ACCEPT` goes to the peer and the request goes |
+| `POST /networks/:network_id/e2e/requests/:id/refuse` `{"from", "payload"}`? | **202** `{"msgid": "…"}`. `REFUSE` goes to the peer and the request goes. Without a body grappa sends it from `*`, for you, to the device the request came from, with payload `{"v":2}`: saying no needs no encryption identity |
+| `DELETE /networks/:network_id/e2e/requests/:id` `{"from", "payload"}`? | **204**. A live `outgoing` request is CANCELLED: `CANCEL` goes to the peer, so their banner goes too, and the body is required for it. An `expired` request, an answer, or an `incoming` one past its deadline just goes, and needs no body |
+
+`from` is the sending device's `did`, and must be LISTED, as at the send
+door. The request is written only once the pacer has taken the line, in
+the same call: a refused send leaves no state behind. 400 `bad_request`
+for a target that is not a nick, a `from` that is not a did, a payload
+outside the rule, an accept without its `{from, payload}` (it starts the
+key exchange, so it needs a listed device), or a `DELETE` of a live
+`outgoing` request without one (both or neither, on every route); 400
+`invalid_line` for a CR, LF or NUL
+in `target`; 422 `unknown_device` for an unlisted `from`; 404 `not_found`
+for an id that is not yours there, an accept or a refuse of an `incoming`
+request past its deadline (a `DELETE` of one just drops it: 204), or no
+session (every route but `GET`); 409 `request_state` for an
+accept or a refuse of a request that is not waiting for YOUR answer, and
+for a `DELETE` of one that is (answer it instead); 413 `too_large` when the
+network's `LINELEN` is too short to frame the line; 429 `rate_limited` when
+the pacer cannot take the line (§4f; consent rides the reactive lane);
+422 `requests_full` when a side is at its cap of **32** per network (the
+peers': `incoming` still within its deadline; yours: `outgoing`, `expired`,
+`accepted`, `refused`). Yours never lapse, so only dismissing one frees a
+room: retrying later changes nothing. 502, 503 and 504 as at the send
+door. Past the cap a peer's new `REQUEST` is dropped.
+
+**The pushes.** On the user topic, to every device of the account:
+
+```json
+{"kind": "e2e_request", "network": "azzurra", "request": {"id": 12, …}}
+{"kind": "e2e_request_gone", "network": "azzurra", "id": 12}
+```
+
+`e2e_request` on a new request or a change of state: your asking, a peer's
+`REQUEST`, the peer's answer, a crossing, and a peer asking again while
+waiting (which refreshes the deadline). `e2e_request_gone` when it goes:
+accepted, refused or dismissed on any device, cancelled by the peer, or
+withdrawn past its deadline. A push is not replayed: `GET` on every
+(re)connect.
+
+A FRESH `incoming` request (none before, or one that had lapsed or changed
+state) also raises a Web Push notification, under the same private-message
+preferences and mute as an encrypted message: the title is the peer's
+nick, the body "would like to start an encrypted chat". It opens the
+plaintext query with the peer as well, where the asking is shown; so does
+a `refused` answer, since the requester may have closed that query during
+a long wait. A refreshed request neither pushes nor opens anything again.
+
+**Crossings.** Two users who ask each other both end at `accepted`: each
+request is the other's consent. Your `REQUEST` meeting their `outgoing`,
+or their `REQUEST` meeting yours, turns it `accepted`, and so does asking
+a peer whose request is waiting (`ACCEPT` goes, not `REQUEST`). A
+`REQUEST` on an `accepted` request leaves it as it is: consent is already
+given. Either way grappa answers that `REQUEST` itself, with one `ACCEPT`
+from `*` (it speaks for you, as with its `NACK`) to the device that asked,
+payload `{"v":2}`: the peer hears your consent even if your own `REQUEST`
+never reached them. Best effort: the request moves even when the pacer
+cannot take the answer. An `ACCEPT` is never answered, so two grappas
+cannot answer each other. A `REQUEST` after a refusal or an expiry is a
+new `incoming` request, and is not answered. A late `ACCEPT` or `REFUSE`,
+past your deadline, finds an `expired` request and is dropped; so is any
+`ACCEPT`, `REFUSE` or `CANCEL` nobody asked for.
+
+**What a client does next.** On `accepted` (from `GET` or the push), open
+the encrypted chat, fetch the peer's keys yourself, then `DELETE` the
+request. On your own accept's 202, the same: open the chat and fetch the
+keys. On `refused`, show it, and `DELETE` once shown.
+
+**Known limits.** There is no delivery receipt: a 202 means grappa's
+pacer took the line, and IRC never confirms (a peer whose client is away
+behind a bouncer simply lets the request lapse after 24 h). The one answer
+IRC does give is a 401 for a nick nobody holds: from v54 it ends your live
+`outgoing` request (`e2e_request_gone`) and pushes `no_such_nick` (§4j);
+before v54 that request waited out its 24 h too. A line dropped
+after it was taken (the session ended, the write failed) raises
+`e2e_send_dropped` with its msgid, which only accept's and refuse's 202
+name; the request stays as written. Requests are keyed by nick: a rename
+moves nothing, and a request made under the old nick stays there and
+lapses, the price a renamed peer's query window pays too. Consent carries
+no trust: grappa verifies nothing in the payload.
+
+Check `protocol_version >= 53`.
+
+### 4j. A nick that is not on the network (issue 2497, v54)
+
+When the ircd answers something sent to a nick with 401 ERR_NOSUCHNICK,
+grappa keeps the 401 as a `notice` row where it always did: in the open
+query with that nick, or on `$server` when none is open (§5a's #640 gate,
+which never opens a window for a reply). A window grappa holds no row
+for, the encrypted query, which lives in your client only, used to hear
+nothing: its message waited for keys that could not come. From v54 the
+fact itself is pushed on the user topic:
+
+```json
+{"kind": "no_such_nick", "network": "azzurra", "nick": "ghost"}
+```
+
+`nick` is the spelling the 401 carries (RAW: fold it before you compare).
+It comes for every 401 that names a nick, whatever was sent: a PRIVMSG, a
+CTCP, an E2E line (§4f), a consent line (§4i). It does not come for a 401
+naming a channel, nor for the 401 a `/whois` folds into its
+`whois_bundle`. The 401 does not say which line it answers, so do not
+fail a message a device of the peer already took: fail what still waits
+for the nick's keys, and stop asking it for keys. The same 401 ends your
+live `outgoing` request to start an encrypted chat with that nick
+(`e2e_request_gone`, §4i): nobody got the `REQUEST`. A peer's request and
+an answer stay.
+
+Check `protocol_version >= 54`.
+
+### 4k. An encrypted file's ciphertext (issue 2517, v58)
+
+A file sent in an encrypted query (§4f) is encrypted by your client, and
+grappa stores the result without being able to read it. Seal the file
+with AES-256-GCM under a fresh random key and IV, upload the ciphertext
+(the GCM tag included) here, and send the key, the IV and the returned
+`url` to the peer inside the encrypted message. grappa never sees the key.
+
+| Request | Answer |
+|---|---|
+| `POST /api/uploads/encrypted`, multipart: `file` (required), `expire` (optional: `3600`, `43200`, `86400` or `259200` seconds; default `86400`) | **201** `{"slug", "url", "expires_at"}`, the same body as `POST /api/uploads` |
+| `GET /uploads/:slug`, no auth | the bytes as uploaded, `content-type: application/octet-stream`, `content-disposition: attachment`, `x-content-type-options: nosniff` |
+
+What grappa does with what you send:
+
+- **The declared content type and filename are ignored.** The file is
+  stored as `application/octet-stream` with no filename and no charset,
+  and its `url` carries no extension. Send the real name and type to the
+  peer inside the encrypted message, never in the multipart part.
+- **Nothing is stripped.** The plain door removes image and video
+  metadata (EXIF, GPS); grappa cannot do that on ciphertext, so the
+  bytes are stored exactly as uploaded. Strip before you encrypt.
+- **One size cap**: the largest of the four per-category caps
+  (`upload.*_per_file_cap_bytes` in `GET /api/server-settings`) plus 16 bytes,
+  the GCM tag. Over it is **413** `{"error": "file_too_large",
+  "max_bytes": N}` with that cap. grappa cannot tell which category the
+  file was, so apply the right category's cap to the plaintext yourself.
+- The storage quota and the expiry work as on the plain door: **507**
+  `insufficient_storage`, **400** `bad_request` for a missing `file` or an
+  `expire` off the ladder, **401** without a bearer.
+- The file always lands in grappa's own store, whatever upload host the
+  admin picked for plain uploads.
+
+What grappa learns is the uploading account, the time, the size (the
+plaintext's plus 16) and the address of whoever fetches the `url`. The
+file expires like any upload: a peer who reads the message after
+`expires_at` finds it gone (`GET` answers 404), even though the message
+itself waits up to 7 days.
+
+Check `protocol_version >= 58`.
+
+### 4l. An encrypted message on its way (issue 2577, v59)
+
+A peer's encrypted message (§4f) reaches grappa line by line, and the
+sender paces those lines, so a long one, or a first one that opens a
+session, can take many seconds to come whole. grappa reassembles it and
+you see only the result (`e2e_message`). From v59 it also tells you when
+such a message begins to arrive:
+
+```json
+{"kind": "e2e_incoming", "network": "azzurra", "from": "vjt-claude",
+ "from_did": "AaZaARRDyBk", "to": "*", "msgid": "q83vEjRWeJA"}
+```
+
+It comes once per message, at its first line, and only for a PKMSG or a
+MSG spanning more than one line: a one-line message is whole the moment
+it arrives, and key material is not a message. `to` is the address its
+lines carry, a device id or `*` for every listed device: take it only when
+it is your device's id or `*`. `from` is the RAW nick. It says that a
+message is on its way and nothing about what it says; grappa has queued
+nothing yet.
+
+One of two things ends it. The `e2e_message` with the same `from_did` and
+`msgid`, for your device (`to_did`), is the message itself. Or:
+
+```json
+{"kind": "e2e_incoming_lost", "network": "azzurra",
+ "from_did": "AaZaARRDyBk", "to": "*", "msgid": "q83vEjRWeJA"}
+```
+
+That message will not reach the device `to` names (`*`: none of them).
+Either it never came whole (no new line for 60 s, a line that contradicted
+it, or a line past a cap), or it came whole and that device's queue did not
+take it, or no listed device could read it (§4f says what the peer and you
+are told then). There is no `from`: grappa no longer holds the nick's
+spelling once the message is gone. Match it to its announcement by
+`from_did` and `msgid`.
+
+Neither event is replayed: a client that connects, or reloads, while a
+message is arriving hears no announcement for it, and the message simply
+lands. Keep no clock of your own to expire an announcement; grappa's is
+the one that counts.
+
+Check `protocol_version >= 59`.
+
+### 4m. Where a grappa user's clients connect from (issue 2597, v62)
+
+From v62 every `whois_bundle` carries two more keys, always present:
+
+```json
+{"kind": "whois_bundle", "network": "azzurra", "target": "alice", "...": "...",
+ "grappa_client_ips": ["2001:db8::7", "203.0.113.9"],
+ "grappa_client_last_known_ip": null}
+```
+
+They say where the grappa user holding `target` connects from, and they
+are `null` unless the asker is entitled: your session holds umode `o` or
+`O` upstream (an IRC operator), or your connection speaks for a grappa
+admin with a full web session — a per-client token (§7) never does, even
+one an admin minted. Read them as four states:
+
+| `grappa_client_ips` | `grappa_client_last_known_ip` | means |
+|---|---|---|
+| `null` | `null` | not for you; or no grappa session on this network holds the nick upstream; or the ircd confirmed no user (no 311) |
+| `["…", …]` | `null` | the addresses that user's live sockets connected from, sorted and deduplicated |
+| `[]` | `"…"` | no socket of theirs is open; this is where their newest login came from — where they logged in, not where they are |
+| `[]` | `null` | no socket open, and no login address on record |
+
+`grappa_client_last_known_ip` is set only beside `[]`. Like the rest of the
+bundle, it reaches only the connection that asked (§4, #1088), so another
+device of yours that is not entitled never sees it. A server below v62
+sends neither key; read their absence as `null`, which is what such a
+server means.
+
+Check `protocol_version >= 62`.
+
+---
+
+## 5. Wire format
+
+- **JSON, UTF-8.** IRC bytes are decoded to UTF-8 at the server boundary;
+  you never parse IRC.
+- **snake_case, without exception.** Every key on every surface is
+  snake_case (`protocol_version`, `server_time`, `read_cursor`, …).
+  grappa's TypeScript wire types are the mirror
+  (`cicchetto/src/lib/wireTypes.ts`); there is not a single camelCase key
+  in the contract, and new fields MUST be snake_case. (This is a
+  deliberate divergence from #447's issue text, which used camelCase; see
+  `docs/DESIGN_NOTES.md` 2026-07-27 for why.)
+- **REST for resources, Channels for events.** State changes are pushed
+  over Channels, not polled over REST.
+- **`:network_id` in a path is a SLUG, not a number.** Every per-network
+  route is mounted under `scope "/networks/:network_id"`, and
+  `GrappaWeb.Plugs.ResolveNetwork` resolves that segment with
+  `Grappa.Networks.get_network_by_slug/1`. The parameter is named for an
+  id and carries a slug; this document used to spell the same segment
+  three ways (`{slug}`, `:slug`, `:network_id`) and a reader could not
+  tell whether they were one axis or three. They are one. Send the slug.
+
+### 5a. Sending to someone other than the window (#640, #1225)
+
+`POST /networks/:network_id/channels/:channel_id/messages` normally sends a PRIVMSG
+to `:channel_id` and echoes it there. Two optional, mutually exclusive fields
+relay the frame elsewhere while keeping `:channel_id` as the **source window**
+the echo renders in:
+
+| field | wire verb | echo row |
+|---|---|---|
+| `ctcp_target` | `PRIVMSG <target> :\x01VERB args\x01` | `kind: "privmsg"`, `meta.ctcp_target` |
+| `notice_target` | `NOTICE <target> :<body>` | `kind: "notice"`, `meta.notice_target` |
+
+Both may name a nick; `notice_target` may also name a **channel**. Neither
+opens a query window for the recipient — a CTCP query is a probe and a NOTICE
+is the verb you must not reply to, so the echo belongs where the operator is
+looking. A POST carrying **both** fields is `400 bad_request`.
+
+Read the recipient off `meta`, never off the row's `channel`: `channel` is the
+source window. A `:notice` row **without** `meta.notice_target` is inbound.
+
+**A send that answers `201` also reads its window (issue 2407).** The server
+advances your read cursor on the window the echo row landed in (its `channel`)
+to that row's `id`, then broadcasts `read_cursor_set` on that window's topic,
+exactly as a `POST …/read-cursor` would. That covers a plain send, a DM, and
+the CTCP / NOTICE / ops-only echoes alike. Replying reads what came before it.
+The advance is monotonic, so a cursor already past the row stays put. It runs
+asynchronously: the `read_cursor_set` may reach you before or after the `201`,
+and is never in its body. A services target (`202`, no row) reads nothing.
+One exception: on a `CASEMAPPING=rfc1459` network, a DM to a nick holding
+`[ ] \ ~` does not advance. That is the same window a `POST …/read-cursor`
+answers `422` for.
+
+### 5b. Ops-only / voice-only delivery (#218, #1247)
+
+An inbound message addressed to a **STATUSMSG target** (`@#chan` ops-only,
+`+#chan` voice) reaches only the members at that level. grappa routes it to
+the CHANNEL window like any other channel message (#218) and records the level
+it was delivered at in `meta.statusmsg`:
+
+| field | value |
+|---|---|
+| `meta.statusmsg` | the membership sigil, verbatim from the wire — `"@"`, `"+"`, or whatever the network's ISUPPORT `STATUSMSG=` advertises (`"%"` on a `@%+` network) |
+
+The key is **absent** on an ordinary channel message; there is no `null` form,
+so presence is the test. It rides `:notice` and `:privmsg` rows alike, and the
+persisted row (REST) and the live push carry the same value.
+
+Render it. Without it an ops-only broadcast is indistinguishable from one the
+whole channel saw — which is the defect #1247 exists to fix. The sigil set is
+per-network and open-ended, so treat an unrecognised level as "restricted",
+never as "everyone".
+### 5c. Channel list modes — ask the server which ones exist (#1251)
+
+A type-A channel mode is a LIST, not a flag, and WHICH letters are type A is
+per-network 005 data. Two fields carry this:
+
+| where | field | meaning |
+|---|---|---|
+| `isupport_changed` | `chanmodes_a` | every type-A letter the network advertises |
+| `isupport_changed` | `list_modes_queryable` | the subset grappa can actually QUERY |
+| `banlist_bundle` | `mode` | which list this bundle answers for |
+
+Query one with the `"banlist"` channel verb, whose optional `"mode"` field
+defaults to `"b"`: `{"network_id": 3, "channel": "#bofh", "mode": "z"}`. The
+reply is a `banlist_bundle` on your user topic (see §4 — it reaches only the
+socket that asked) carrying the same `mode`.
+
+**Offer `list_modes_queryable`, not `chanmodes_a`.** The difference between
+the two is a letter the network has and grappa cannot read the replies for;
+asking for it earns `unsupported_list_mode` rather than a request that never
+terminates. Do not derive the set from the letters yourself — the numeric
+table behind it is server knowledge, and it is not a constant: `728/729`
+carry bahamut's restrict list (`z`) on one network and solanum's quiet list
+(`q`) on another.
+
+The names are historical. The event is `banlist_bundle` and the verb is
+`"banlist"` because the contract is additive-only (§2) and renaming a
+published kind is a removal; both have carried every list since #1251.
+
+### 5d. Which `:mode` rows changed the CHANNEL (issue 2176, v25)
+
+A `:mode` row carries `meta.structural: true` when the token it reports
+changed the **channel** — a ban, a key, a limit, a flag — rather than a
+member's status prefix. It lets a denoised window fold the `+o`/`+v`
+churn and still show the `+b`.
+
+| field | value |
+|---|---|
+| `meta.structural` | `true` on a channel-affecting `:mode` row |
+
+The key is **absent** otherwise, with no `null` form, so presence is the
+test — and absence means exactly what it meant before the key existed,
+which is why this was additive. It is absent on every row written before
+v25, so do not read absence as "not structural" on old history; read it as
+"unknown, treat as before".
+
+Check `protocol_version >= 25`.
+
+---
+
+### 5e. Ask `/messages/count` only the THRESHOLD (issue 2282, v30)
+
+`GET /networks/:network_id/channels/:channel_id/messages/count?after=<id>`
+answers **two** questions in one body, and they cost very different amounts:
+
+| key | question | cost |
+|---|---|---|
+| `count` | raw rows after the anchor — "can I page this gap contiguously?" | cheap-ish |
+| `messages` + `events` | the content / presence split the bar renders | the expensive half |
+
+Add **`&cap=<positive int>`** to ask the first one ALONE. The response is
+then `{"count": N}` — one key — with `N = min(true_count, cap)`. `N == cap`
+means "at least `cap`"; below `cap` the number is exact.
+
+```
+GET …/messages/count?after=41234&cap=201   →   {"count": 201}
+GET …/messages/count?after=41234           →   {"count": 3412, "messages": 2880, "events": 532}
+```
+
+**Why you want it.** If your branch is a threshold — grappa's own client
+asks `gap > 200` — you do not need the count. Measured on a 372,651-row
+corpus at a 200,014-row gap: the two-question body costs 12,963,811 SQLite
+VM steps, the capped one **4,304**. Same covering index; only the `LIMIT`
+moves.
+
+**`cap` does not shrink what is counted.** It is a limit on rows the
+predicate already selected, so your presence filter, the subject narrowing
+and the channel-or-DM shape all still apply. A window holding one visible
+message in a thousand hidden joins answers `1`, not `201`.
+
+**The split is not gone, it is deferred.** Ask again without `cap` when you
+need the labels — after you have painted, which is the whole point.
+
+**Both directions degrade, so you can adopt this before the server has it:**
+
+- capped client → older server: the unknown param is ignored and you get the
+  three-key body. Read `count` out of it; the threshold is the same boolean,
+  just paid for in full.
+- old client → this server: never sends `cap`, gets a byte-identical body.
+
+`cap=0` is `400 bad_request` — a count that saturates at zero reads "near"
+for every gap — as are negatives, non-integers and `?cap[]=1`.
+
+Check `protocol_version >= 30`, or just send it: the fallback above is why
+you do not have to.
+
+### 5f. The DM conversation id — v34 to v36, REMOVED in v37 (issue 1365)
+
+From v34 to v36 every scrollback row and every `query_windows_list` entry
+carried **`dm_conversation_id`**, an integer meant to give a DM
+conversation an identity other than the peer's nick. **v37 takes it back
+off both shapes**, and there is nothing to replace it with: a DM
+conversation is keyed by the peer's nick under the ASCII fold of §4, as it
+was before v34.
+
+Why it went: it existed for a client to key its DM windows by id once a
+NICK change moved them. Since issue 1365 a NICK moves nothing — a renamed
+peer's next message opens a new window (§5h) — so no identity has to
+outlive a nick, and no client ever read the field.
+
+Removing a field is not covered by the additive rule (§2), and it was done
+on an explicit ruling (the #1626 bar). What makes it safe is that the key
+was always declared `optional`: a client written against v34-v36 already
+had to accept its absence from an older server, so it accepts it from a
+newer one too. If yours keyed anything on it, fall back to the folded
+nick; a v34-v36 server still sends it, and an unknown key is ignored.
+
+### 5g. A mention names its message and its window (issue 2333, v35)
+
+From v35 every row of `mentions_bundle.messages` carries two more keys:
+
+| key | what it is |
+|---|---|
+| `id` | the scrollback id of the message — the same id `GET …/messages` rows carry, so it works as a `?before=` / `?after=` / `?around=` cursor |
+| `dm_with` | on an inbound DM, the peer's nick, RAW (as they spelled it); `null` on every other row |
+
+**Why `dm_with`, and why `channel` did not change.** An inbound DM is
+stored at `channel` = **your own nick** — `channel` there names the
+recipient, not the window. So `channel` alone would send you to your
+self window (`/msg <yournick>`), where that row is not shown. The window
+of a mention is `dm_with` when it is non-null, else `channel`; fold it as
+you fold any DM window name (§4). `channel` keeps its meaning on every
+row: nothing was repurposed.
+
+**Absent** means the server predates v35: both keys are declared
+`optional` in the server's typespec for that reason. Without `id` you
+cannot scroll to the message; switch to the window and stop there.
+
+### 5h. A scrollback row says whether it is a DM (issue 1365, v36)
+
+From v36 every scrollback row (the `message` push, the REST pages, the
+`GET /boot` head pages) carries **`dm_with`**: the DM peer's nick, RAW,
+on every row of a DM conversation — inbound AND outbound (and the self
+window, where it is your own nick) — and `null` on every other row. It is
+the same key, with the same meaning and the same optionality, as the
+`mentions_bundle` row's `dm_with` (§5g); on a mention it is only ever
+inbound because your own rows are never mentions.
+
+**Why it matters: a nick change rewrites nothing.** Since issue 1365 a
+nick change — a peer's or your own — causes no server-side update. An
+inbound DM keeps `channel` = the nick **you held when it arrived**, so
+after your first rename "`channel` equals my nick" stops recognising
+your DM history. "Is this row a DM?" is `dm_with != null`. Your OWN rows
+carry `dm_with` too (an outbound DM names its peer), so decide "is this
+row mine?" first, by comparing `sender` with your nick.
+
+A peer's rename does not move their query window either: their next
+message under the new nick opens a NEW window, and the old one keeps its
+history under the old nick.
+
+**Absent** means the server predates v36; fall back to comparing
+`channel` with your nick, which is correct for a row you just received.
+
+What a renamed peer's old query window DOES get (issue 2368) is one row saying where the peer
+went: a `nick_change` with `channel` = the old nick, `sender` = the old
+nick, `meta.new_nick` = the new one and **`dm_with` = `null`** — it is an
+event, not something either of you said. It is pushed on that query
+window's topic and served in its REST pages, so key it by the topic (or
+`channel`), not by `dm_with`. One row however many channels you share, and
+only when the window is open; the server never opens a window to hold it.
+It exists only when the IRC server told us about the rename, which it does
+only for a peer that shares at least one channel with you: a peer you only
+DM can rename without you, or grappa, ever seeing it. No new field or kind,
+so no protocol bump — an older client renders it as the `nick_change` it
+already knows.
+
+---
+
+### 5i. Paging scrollback by TIME (issue 2372, v40)
+
+`GET /networks/:network_id/channels/:channel_id/messages` takes three time
+cursors beside the id ones. They are built for a client that receives IRCv3
+`draft/chathistory` `timestamp=` selectors and has to turn them into a
+grappa query.
+
+| param | rows | order |
+|---|---|---|
+| `before_time=<ms>` | `server_time < ms`, the `limit` nearest `ms` | newest first |
+| `after_time=<ms>` | `server_time > ms`, the `limit` nearest `ms` | oldest first |
+| `around_time=<ms>` | `floor(limit/2)` with `server_time <= ms` + `ceil(limit/2)` with `server_time > ms` | newest first |
+
+- **One value format: decimal epoch milliseconds**, `0` up to int64 max.
+  That is the unit every row's `server_time` already carries, so you can
+  send a row's value back as it is. ISO-8601 is a `400`; convert on your
+  side (`2026-10-11T10:00:00.000Z` → `1791712800000`). So is a negative
+  number, a fraction, an empty value, or `?before_time[]=1`.
+- **One mutex over all six cursors**: any two of `before`, `after`,
+  `around`, `before_time`, `after_time` and `around_time` together is a
+  `400`.
+- **Ordered by `(server_time, id)`**, with `id` breaking a tie inside the
+  same millisecond.
+- **The bound is strict and applies to `server_time` only.** Every row
+  stamped with the bound millisecond is left out of BOTH `before_time` and
+  `after_time`. This is the chathistory BEFORE/AFTER semantics. It means
+  that paging by sending back the oldest row's `server_time` skips the
+  rows from that millisecond that did not fit in the page. **To page
+  without losing rows, make the first query by time and the following ones
+  by id** (`before=<oldest id>`, `after=<newest id>`). The two orders agree
+  as long as the server's wall clock only moves forward: `server_time` and
+  `id` are minted together, in one process, for each row. They come apart
+  only after the clock steps BACKWARDS (an NTP correction, say). A row
+  written after the step has a higher id but an older `server_time`, so
+  moving from time to id at that point can return rows past your bound or
+  skip some. It is rare, and it never happens without a clock step; if you
+  need the guarantee, filter what comes back by `server_time` yourself.
+- `limit`, the `200` ceiling, the presence hiding and the row shape are
+  the same as for the id cursors.
+
+**Check `protocol_version >= 40` before you send them. Unlike `cap` (§5e),
+this is not optional.** A server older than 40 ignores the unknown param and
+answers with the **latest** page and a `200`: wrong rows, no error. Keep
+your id-based fallback for those servers.
+
+### 5j. The away bundle is capped, and says so (issue 2419, v41)
+
+From v41 the `mentions_bundle` payload carries **`truncated`** (boolean).
+The server scans at most a fixed number of content rows of the away window
+(`Grappa.Mentions.max_bundle_rows/0`, 20,000 today), the NEWEST ones. When
+the window held more, `truncated` is `true`: the older part of the window
+was never scanned, so it may hold mentions that are not in `messages`.
+Tell the user, and point them at the channels' own history for the rest.
+
+A truncated bundle is pushed even when `messages` is empty — the scanned
+part held no mention, the unscanned part still might. Before v41 an empty
+bundle was never pushed, so a client that assumed `messages` is non-empty
+must stop assuming it.
+
+**Absent** means the server predates v41; read it as `false`. Such a server
+never truncated: it loaded the whole window, however large.
+
+### 5k. The away bundle leaves muted conversations out (issue 2427)
+
+`mentions_bundle.messages` carries nothing from a conversation muted in
+`notification_prefs.muted_targets`: the same mutes, keyed the same way,
+that keep push notifications quiet. A row with `dm_with` is muted by its
+peer's key, and any other row by its `channel`'s. The mutes are read when
+the user comes back, not as each message arrived. So a mute whose `until`
+passed during the away counts as lifted, and its mentions are in the
+bundle.
+
+The payload shape is unchanged, so `protocol_version` did not move. A
+server from before this fix includes muted conversations. A client that
+filters them out itself, with the same keys, ends up with the same rows
+from either server, so keeping the filter does no harm. One difference
+remains: when every mention was muted, a new server sends no bundle,
+while an old one sends a bundle that the filter empties.
+
+## 6. Rate limiting & flood protection (#630)
+
+grappa applies a **coarse per-subject inbound budget** across BOTH doors —
+every WS `handle_in` verb AND every authenticated non-admin REST write
+(`POST`/`PUT`/`PATCH`/`DELETE`). It is a shared budget: you cannot dodge it
+by switching surface. (The `is_admin`-gated `/admin/*` console + `AdminChannel`
+are exempt — operator surfaces, not the untrusted flood vector.)
+(A finer per-`(subject, network)` bucket also guards message sends, #340.)
+A well-behaved client never notices it; a flood does.
+
+**Over budget → refuse + retry hint (additive, snake_case):**
+
+| door | response |
+|------|----------|
+| REST write | HTTP `429` with body `{"error":"rate_limited","retry_after_ms":<int>}` and a `Retry-After` header (seconds) |
+| WS verb | the push reply errors with `{"error":"rate_limited","retry_after_ms":<int>}` (the socket stays open) |
+
+Back off for at least `retry_after_ms` before retrying; nothing was queued.
+
+**Sustained abuse → the web session is severed.** If a client keeps
+flooding past the 429s, grappa:
+
+1. pushes a `web_session_severed` **event** on your user topic —
+   `{"kind":"web_session_severed","code":"rate_limit_flood"}` (the
+   snake_case sever/close code); then
+2. **revokes your auth session** (bearer) — a reconnect with the OLD
+   credentials is refused (`401`/socket-connect refusal) until you
+   **re-authenticate**; then
+3. **closes the socket.**
+
+Re-authenticate (fresh login → fresh bearer) to recover. 🔴 Your **IRC
+session is NOT touched** — the bouncer stays connected on your behalf and
+your presence in channels is unaffected; only the *web* session dies. A
+client should treat `web_session_severed` as "drop to the sign-in screen
+and tell the user they were disconnected for sending too fast," not as a
+netsplit or an IRC event.
+
+Per §2 all of the above is additive: a client that does not recognise the
+`rate_limited` token or the `web_session_severed` frame still degrades
+safely (the 429 status / the socket close remain unambiguous).
+
+### 6a. Cold boot — do NOT fan out; ask `GET /boot` (#1679)
+
+🔴 **The budget above does not protect you here, and the thing that stops
+you is not grappa.** The budget meters write methods only, so a boot — pure
+`GET` — passes it untouched. What a deployment actually puts in front of
+grappa is a reverse proxy with a `limit_req` zone, and that answers **`503`,
+not `429`**, with no `retry_after_ms` and no `Retry-After` to back off on.
+
+This is not hypothetical. A client that fetched the channel list per network
+and then a backlog page per channel presented **81+ requests at once** on a
+seven-network account, and a proxy at `burst=50` rejected 31 of them; the
+user saw a blank window. The same shape had already, on an earlier occasion,
+tripped a `fail2ban` jail and got the client's IP **firewall-banned**. A
+boot whose request count scales with the size of the account will find a
+limiter somewhere, and every operator's is configured differently — so the
+client has to be well-behaved at defaults rather than assume a tuned proxy.
+
+**One request answers the whole picture:**
+
+```
+GET /boot
+→ 200 application/json
+{
+  "networks": [ … ],                          // identical to GET /networks
+  "channels": { "<slug>": [ … ] },            // identical to GET /networks/:network_id/channels
+  "heads":    { "<slug>": { "<chan>": [ … ] } } // newest page per channel
+}
+```
+
+The three values are the SAME shapes the per-request endpoints return — one
+decoder, not two. `channels` carries one key per network you hold; `heads`
+carries one key per channel that HAS history (a channel with none is absent,
+like a missing `read_cursors` key, rather than mapped to `[]`).
+
+Pair it with `GET /me` — which already answers `read_cursors`,
+`unread_counts` and `badge_count` in bulk — and a cold boot is **two
+requests, flat in the size of the account**, however many networks and
+channels it holds.
+
+The per-channel endpoints are unchanged and stay for everything that is not
+boot: paging further back (`?before=`), resuming a gap (`?after=`), and
+measuring one (`/messages/count`). `/boot` replaces the fan-out, not them.
+
+> Note the reconnect path too. A WebSocket resume that re-fetches a backlog
+> page for every channel it re-joins presents the same burst as a cold boot,
+> from the same account size — the limiter cannot tell the two apart.
+
+---
+
+## 7. Per-client tokens (#1196)
+
+If the account you connect as has a second factor armed — TOTP or a
+passkey — `POST /auth/login` with the account password answers **202
+`two_factor_required`**, and there is nothing an unattended client can
+do with that: a TOTP code rotates every thirty seconds, WebAuthn needs
+an authenticator and an origin, and a recovery code is single-use.
+
+A **per-client token** is the credential to use instead. Its owner mints
+it from a browser session and pastes it into your config; **you send it
+in the `password` field of `POST /auth/login`, exactly where the account
+password would go.** Nothing else about your login changes:
+
+```
+POST /auth/login  { "identifier": "vjt", "password": "<the token>" }
+200               { "token": "<the same token>", "subject": {...} }
+```
+
+Three properties worth designing around:
+
+- **The reply is the token you sent.** The token IS the bearer, so a
+  reconnect does not mint a new session; store it once and reuse it. You
+  may also skip `/auth/login` entirely and present it directly as
+  `Authorization: Bearer <token>` / the WS bearer subprotocol (§3a).
+- **It does not expire while idle.** A browser session dies after seven
+  days of silence; a client token does not. Only revocation ends it —
+  by its owner, or by an operator resetting the account's factors or
+  rotating its password. Its owner arming, disarming or changing a
+  second factor does NOT (#1284), so minting the token first and arming
+  the factor afterwards is a safe order. Expect a `401`, and surface it
+  as "this token was revoked", not as a transient network error.
+- **It is scoped.** A client token can read and send as the account, and
+  that is all. The account's own credential surfaces — `/admin/*`,
+  `/me/totp*`, `/me/passkeys*`, `DELETE /me`, and the token routes
+  themselves — answer **403 `client_token_scope`**. That is not a
+  credential problem and retrying will not help: the operation needs a
+  browser session. Do not treat it like a `401`.
+
+A wrong token is indistinguishable from a wrong password: same `401
+invalid_credentials`, same login throttle (`429 too_many_attempts` after
+ten failures from one address in fifteen minutes). Back off accordingly.
+
+Minting, listing and revoking are the account owner's job, from a
+browser session, and are documented here only so a client author knows
+what to tell them: `POST /me/client-tokens {label, password}` returns
+`token` **once**; `GET /me/client-tokens` lists `{handle, label,
+created_at, last_seen_at, ip, user_agent}` and never the secret again;
+`DELETE /me/client-tokens/:handle` revokes one.
+
+Source: `GrappaWeb.AuthController`
+(`account_login/3`), `GrappaWeb.Plugs.RequireFullSession`,
+`GrappaWeb.ClientTokenController`.
+
+---
+
+## 8. Settings surfaces worth knowing about
+
+### 8a. `display_prefs` has EIGHT keys (issue 2270, v29)
+
+`GET` / `PUT /me/settings/display-prefs` carries the per-user display
+object. As of v29 it has eight keys, the eighth being `date_format`:
+
+```
+time_format · colored_nicklist · presence_filter · show_bottom_bar ·
+strip_formatting · show_event_badge · bold_mentions · date_format
+```
+
+It is absent-tolerant in BOTH directions by construction — the server
+fills a missing key from its own defaults on the way in, so a `PUT` that
+omits keys does not erase them, and a client predating a key simply never
+sees it. That is why the object can keep growing without a floor move.
+Treat the set as open: a key you do not recognise is one you drop, per §2.
+`min_protocol_version` did not move for this.
+
+**Absent-tolerant is not value-tolerant, and `date_format` is where the
+difference first bites.** Six of the eight keys are booleans and the
+seventh (`time_format`) has been there since the object shipped;
+`date_format` is the first CLOSED-SET string added after the fact, so it
+is the first key that can be both optional and wrong. Omit it and you get
+the default; send a value outside
+`"auto" | "dmy" | "mdy" | "ymd"` and the `PUT` is **rejected with a 422**
+carrying `field_errors.display_prefs`. It is not coerced to `"auto"` —
+a coerce would read back as a preference the user never chose while the
+write reported success. `"auto"` is a REAL key meaning "follow the
+viewer's resolved locale", never the absence of one.
+
+Source: `Grappa.UserSettings` (the `display_prefs` typespec and
+`default_display_prefs/0`), served by
+`GrappaWeb.UserSettingsController.show_display_prefs/2` /
+`update_display_prefs/2`.
+
+### 8b. The per-subject upload caps are visible but NOT actionable (issue 2175, v26)
+
+`Grappa.ServerSettings.Wire.upload_view/1` — the projection shared by
+`GET /api/server-settings`, `GET /admin/settings` and the
+`server_settings_changed` push — grew two keys at v26:
+
+| field | meaning |
+|---|---|
+| `per_user_cap_bytes` | total upload bytes one account may hold |
+| `per_visitor_cap_bytes` | the same for a visitor |
+
+🔴 **Read them; do not build a quota UI on them.** They are on the wire for
+the ADMIN console, and a client cannot act on them: a per-subject refusal
+is routed through the **existing** `:insufficient_storage` → **507**, the
+same status the instance-full case returns. So you cannot distinguish "this
+server is out of space" from "you are at your own quota" — both are a bare
+507, and a client that guesses will tell the user the wrong thing. The
+honest copy for a 507 is "the upload was refused for lack of space",
+without attributing the cause.
+
+They are published so the operator's own knob is readable in the admin
+surface; that is the whole reason, and it is recorded here so a client
+author does not read their presence as an invitation.
+
+### 8c. An `/ignore` entry is a PAIR, and `masks` no longer tells you all of it (issue 2294, v31)
+
+`/networks/:network_id/ignores` is the per-network ignore list
+(`GrappaWeb.IgnoresController`, rendered by `GrappaWeb.IgnoresJSON`). A
+message is DROPPED before it exists — no scrollback row, no badge, no push —
+when the sender matches an entry. Since issue 2487 the same holds for an
+INVITE from a matching sender: no row, no `window_invited`, no `:invited`
+window, no push. An INVITE carries no text, so only an entry WITHOUT a
+`text_pattern` drops it.
+
+Until v31 an entry was a `nick!user@host` glob and nothing else. It now
+carries an OPTIONAL second glob over the message TEXT, and a PRIVMSG/NOTICE
+is dropped when **both** match. That exists for relay bots: every line a
+Telegram↔IRC bridge relays wears the BRIDGE's prefix, with the real author
+inside the body as `<Nick> text`, so a mask-only rule could only silence the
+whole bridge.
+
+**The additive seam, and what an old client keeps getting.** Every response
+still carries `masks` — the same array of mask strings, same order. Beside
+it is `entries`, the same list as objects:
+
+| field | meaning |
+|---|---|
+| `mask` | the normalised `nick!user@host` glob |
+| `text_pattern` | the text glob, or `null` — the key is ALWAYS present |
+
+A client that only knows `masks` is unaffected and still sees every rule,
+including targeted ones (it sees the mask, not the narrowing). A client that
+wants the pattern reads `entries`. `masks` was NOT turned into a list of
+objects: that would be a repurposed field, which §2 forbids outright.
+
+**Two entries may share a mask.** That IS the bridged-author case
+(`relay!*@*` matching `<A>*` and `<B>*` are two rules), so `masks` can carry
+the same string twice and the identity of an entry is the PAIR. A client
+keying a map on `mask` alone WILL collapse two rules into one and delete the
+wrong one.
+
+**The two mutations:**
+
+* `POST` — body `{"mask": "...", "text_pattern": "..."}`. `text_pattern` may
+  be omitted or `null`; either is the pre-v31 entry. A blank-after-trim or
+  CR/LF-bearing pattern is **422 `invalid_text_pattern`**, a token distinct
+  from `invalid_mask` because the operator typed two things.
+* `DELETE /ignores/:mask?text_pattern=...` — the pattern rides the QUERY
+  string, since the mask already owns the path segment and a pattern carries
+  spaces. **Omitting it removes the entry with NO pattern**, not every entry
+  sharing the mask: a removal is the exact inverse of the add that wrote it.
+
+Both answer `{masks, entries, mask, text_pattern, outcome}` — the resulting
+list plus the NORMALISED entry acted on, so a client renders the list and
+reconciles nothing.
+
+**Matching rules, so a client can explain them to a user:** glob (`*`, `?`)
+like the mask; **absolutely anchored**, so `<SomeNick>*` matches a body that
+STARTS with that and a bare `spam` matches only the body that IS `spam` (a
+"contains" is `*spam*`); **ASCII-case-insensitive** (`CAFÉ` and `café` stay
+distinct, exactly as for a nick); and a CTCP **ACTION** is matched on the
+UNWRAPPED text (`waves`, not `\x01ACTION waves\x01`), while any other CTCP
+frame is matched raw.
+
+### 8d. Deleting a network takes its scrollback with it (issue 2320, v33)
+
+Admin console only (`is_admin` bearer). `DELETE /admin/networks/:id` used to
+refuse with **409 `scrollback_present`** while any scrollback row referenced
+the network. It no longer refuses on that: the network goes together with
+every row of its scrollback, across all subjects. The one refusal left is
+**409 `credentials_present`** (with `credential_count`) — unbind every
+credential first, as before.
+
+`scrollback_present` is **gone from the error-token set** at v33. A client
+that still has an arm for it keeps working — the server simply never sends
+it again.
+
+To tell the operator what the delete destroys, ask first:
+
+* `GET /admin/networks/:id/message_count` → `{"message_count": n}`, the
+  number of scrollback rows the delete takes. Unknown id → 404.
+
+It is a separate request on purpose: `GET /admin/networks` keeps its cheap
+per-row reads, and the count is paid only when a confirm actually opens.
+Against a server older than v33 the route does not exist (404) — a client
+must treat that as "cannot confirm", not as zero.
+
+### 8e. The auto-away site default is on the wire (issue 2359, v39)
+
+`GET /api/server-settings`, the user-topic after-join snapshot and the
+`server_settings_changed` push carry a new subtree:
+
+```json
+"auto_away": { "default_debounce_seconds": 600 }
+```
+
+It is the window a session waits before the automatic `AWAY` when the
+subject chose no preference of their own (`auto_away_debounce_seconds`
+absent). Same encoding as that per-subject setting: **seconds, `0` = off**.
+It is the RESOLVED value — what the operator stored in Admin → Settings,
+else the deployment's boot config — so print it as is; there is nothing
+for a client to combine. It moves at runtime: re-render on every
+`server_settings_changed`, do not cache it for the session.
+
+Against a server older than v39 the subtree is absent. Render the
+no-preference entry WITHOUT a number then; do not substitute a guess.
+
+Admin console only (`is_admin` bearer): `GET`/`PUT /admin/settings` carry
+an `auto_away` subtree of their own —
+`{"default_debounce_seconds": <stored or null>, "fallback_debounce_seconds": n}`.
+`PUT` accepts `default_debounce_seconds` in `0, 60, 300, 600, 1800, 3600`
+or `null`, which deletes the stored value so the boot config applies
+again; anything else is **422 `invalid_setting`** with
+`field: "auto_away.default_debounce_seconds"`.
+
+A successful `PUT` takes effect on RUNNING sessions too: every live session
+whose subject has no preference of their own moves to the new window at
+once (an armed timer restarts at the new length); a session with an
+explicit `auto_away_debounce_seconds` is untouched. Known exception: a
+session the server restarted after a crash returns to the window it was
+first started with, until the next admin save.
+
+### 8f. Command counts are written by the client, one verb per send (issue 2584, v61)
+
+`GET /me/settings/command-counts` answers
+`{"command_counts": {"<verb>": <count>, ...}}`, which says how many times
+the subject sent each command. cicchetto uses it to order its `/` menu,
+most used first. Before the first count it is `{}`.
+
+`POST /me/settings/command-counts` with `{"verb": "<verb>"}` counts one
+use and answers the same envelope with the whole map, not just the one
+count. Send it **after** a command actually goes out, once per command.
+Send the verb as the user typed it, alias names included, and nothing that
+followed it: `/ns identify <password>` posts `{"verb": "ns"}`. The server
+cannot count for you. It never sees the verb as typed, and a local command
+never reaches it.
+
+The server checks the shape and nothing else. The verb is trimmed and
+lowercased, must be non-empty with no whitespace, and is at most 32 bytes,
+the same rule alias names follow. A verb outside it gets **422** with
+`field_errors.command_counts`. Once 512 distinct verbs are stored, a NEW
+one gets the same 422, while one already counted always counts. A body
+without a string `verb` gets **400 `bad_request`**.
+
+There is **no event**. Another open device sees new counts the next time
+it fetches them; cicchetto does that at every (re)join of the user topic.
+The POST is a metered write like any other (429 `rate_limited`, §6), so
+treat a failure as a lost count, never as a failed command.
+
+**Key off `protocol_version >= 61`, not off a 404.** Against an older
+server the `POST` answers 404, but the `GET` answers **200 with
+`text/html`**: an unknown `GET` path falls through to the web app's
+catch-all page. A client that parses that body as JSON fails, and a
+client that tests only for 404 believes the route exists. Below v61, use
+an order of your own and do not post.
+
+## 9. Event kind inventory (issue 2260)
+
+Every `"event"` frame carries a `kind`. This is the complete set the server
+can push to a client, so you can see at a glance what exists rather than
+meeting a kind on the wire and guessing. It is held by
+`scripts/client-protocol-gate.sh`: a kind emitted with no row here fails CI.
+
+**The `topic` column tells you where to listen**, and getting it wrong is
+the one mistake that costs you hours:
+
+* **`user`** — `grappa:user:{user}`. Subscribe at connect.
+* **`channel`** — the per-channel topic. Post-join-handshake traffic only.
+* **`requester`** — the user topic, but delivered **only to the connection
+  that issued the command** (#1088). Not a broadcast; your other devices do
+  not see it. If your socket dies before the ircd answers, the reply dies
+  with it — re-issue.
+
+🔴 Window state (`joined`, `join_failed`, `kicked`, `window_pending`,
+`window_invited`) is on the **user** topic, not the channel topic. §4 explains
+why; a client waiting on the per-channel topic for a live `joined` waits
+forever.
+
+| `kind` | topic | what it is |
+|---|---|---|
+| `archive_changed` | user | the archive listing for a network changed — refetch it |
+| `archive_purged` | user | archived scrollback for one target was deleted |
+| `auto_away_debounce_changed` | user | the subject's auto-away debounce setting changed |
+| `auto_away_reason_changed` | user | the subject's remembered auto-away text changed |
+| `away_nick_suffix_changed` | user | the subject's auto-away nick suffix changed (`null` = rename off) |
+| `away_confirmed` | user | upstream acked an AWAY / BACK |
+| `banlist_bundle` | requester | the folded `+b` / `+e` / `+I` list for one channel (§5c) |
+| `bundle_hash` | user | a new cic bundle is live — hash + version |
+| `channel_created` | channel | 329 RPL_CREATIONTIME for the window |
+| `channel_modes_changed` | channel | the channel's mode set changed (§5d) |
+| `channels_changed` | user | the active channel set changed |
+| `connection_progress` | user | transient connect-progress badge (`connecting` / `connected`) |
+| `connection_state_changed` | user | a credential's `connection_state` moved; refreshes `GET /networks` |
+| `dcc_offer` | user | an inbound `DCC SEND` awaiting consent (§4b) |
+| `dcc_offer_resolved` | user | that offer left the held set (§4b) |
+| `directory_complete` | user | the `/LIST` channel-directory scan finished |
+| `directory_failed` | user | the `/LIST` scan failed or timed out |
+| `directory_progress` | user | `/LIST` scan progress count |
+| `e2e_incoming` | user | a peer's PKMSG or MSG spanning several lines began to arrive: `from`, `from_did`, `to` (a device id or `*`), `msgid`; ended by its `e2e_message` or by `e2e_incoming_lost` (§4l, v59) |
+| `e2e_incoming_lost` | user | a message `e2e_incoming` announced will not reach the device `to` names: `from_did`, `to`, `msgid` (§4l, v59) |
+| `e2e_message` | user | one whole end-to-end encrypted message for one of your devices (`to_did`, v49): from a peer, or, with `own: true` (v50), a copy of one your other device sent; `channel` (v63) names the channel it was sent to, or is null for a DM; payload never decoded; queued until that device acks (§4f) |
+| `e2e_pairing_closed` | user | a pairing rendezvous is gone: `closed` by a side, `expired`, or `replaced` by a newer open (§4g, v48) |
+| `e2e_pairing_message` | user | a side posted message `seq` on a pairing rendezvous; no payload, fetch it (§4g, v48) |
+| `e2e_pairing_offered` | user | a pairing rendezvous opened with the creator's key, offered to the account's other devices: its code and `expires_at`; also in each join snapshot until someone joins (§4g, v55) |
+| `e2e_request` | user | a request to start an encrypted chat was made or changed state: yours, a peer's, the peer's answer (§4i, v53) |
+| `e2e_request_gone` | user | that request is gone: answered, dismissed, cancelled by the peer, or withdrawn past its deadline (§4i, v53) |
+| `e2e_send_dropped` | user | an outbound end-to-end encrypted message accepted by the send door and dropped unsent: `late`, `send_failed` or `session_ended` (§4f, v46) |
+| `invite_ack` | user | 341 RPL_INVITING — an INVITE you sent was accepted by the ircd |
+| `isupport_changed` | user | the network's 005 capability set (§5c, §5) |
+| `join_failed` | user | the window reached `:failed`, with reason + numeric |
+| `joined` | user | the window reached `:joined` |
+| `kicked` | user | the window reached `:kicked`, with `by` + reason |
+| `links_bundle` | requester | `/LINKS` answer |
+| `lusers_bundle` | user | `/LUSERS` answer — **fans out to every connection**, because the server also emits it unsolicited at connect (§4) |
+| `members_seeded` | channel | pre-sorted member list on 366 RPL_ENDOFNAMES |
+| `mentions_bundle` | user | cross-channel mention summary, fired on the auto-away → present transition. From v35 each row carries `id` and `dm_with` (§5g); from v41 the payload carries `truncated` (§5j) |
+| `message` | channel | a scrollback row; its own `message.kind` (`privmsg`, `notice`, `join`, `part`, `quit`, `nick_change`, `mode`, …) is a **different axis** from this one. From v36 it carries `dm_with` (§5h); v34-v36 also carried `dm_conversation_id`, removed in v37 (§5f) |
+| `names_reply` | requester | `/NAMES` answer |
+| `network_attached` | user | the subject re-attached a network binding (§4e) |
+| `network_detached` | user | the subject hid a network binding (§4e) |
+| `no_such_nick` | user | upstream answered something sent to `nick` with 401 ERR_NOSUCHNICK: the nick is not on the network (§4j, v54) |
+| `notify_list` | user | the subject's notify / watch list |
+| `own_nick_changed` | user | our own nick changed — carries `network_id`, not a slug |
+| `peer_away` | user | a peer's away text |
+| `presence_changed` | user | our presence / away state changed |
+| `presence_error` | user | upstream watch-list rejection (`ERR_MONLISTFULL`, `ERR_TOOMANYWATCH`) |
+| `presence_snapshot` | user | cold-join presence snapshot, pushed to your socket alone |
+| `query_windows_list` | user | the full DM window list (v34-v36 entries also carried `dm_conversation_id`, removed in v37, §5f); no NICK moves a window since issue 1365 (§5h), so no rename emits it |
+| `quit_part_reason_changed` | user | the subject's remembered quit / part text changed (§4d) |
+| `read_cursor_set` | channel | the read cursor moved — `last_read_message_id` + badge count |
+| `recover_progress` | user | ghost-recovery progress |
+| `recover_result` | user | ghost-recovery outcome (`succeeded` / `failed` + reason) |
+| `server_reply` | requester | MOTD and other server text |
+| `server_settings_changed` | user | operator-owned server settings changed (§8) |
+| `session_identity_changed` | user | the NickServ identification verdict — gate on `identified`, never a mode letter (§4) |
+| `supported_umodes_changed` | user | the umode letters this ircd supports |
+| `topic_changed` | channel | the channel topic changed |
+| `umode_changed` | user | our own user modes changed |
+| `web_session_severed` | user | the flood ladder severed this bearer (§6); the socket is about to close |
+| `who_reply` | requester | `/WHO` answer |
+| `whois_avatar_ready` | user | a peer avatar finished caching; carries the route to it |
+| `whois_bundle` | requester | `/WHOIS` answer |
+| `whowas_bundle` | requester | `/WHOWAS` answer |
+| `window_counts` | channel | unread + mention counts for the window |
+| `window_invite_declined` | user | the operator refused an invite — drop the `:invited` banner |
+| `window_invited` | user | an inbound INVITE opened a not-joined window (§4) |
+| `window_pending` | user | a join is in flight |
+
+### 9a. What is deliberately NOT in this table
+
+**`parted` does not exist.** An own-PART archives the window by **removing**
+it from the window-state map: absence IS the signal, and the `:part` row that
+ships alongside is the feed line. There is no `kind: "parted"` and there never
+was — if you are waiting for one, you are waiting for nothing. (Issue 2260
+listed it as undocumented; it was a regex matching the server comments that
+say it is not emitted.)
+
+**Admin events are not here.** `grappa:admin:events` is a separate topic on a
+separate channel (`GrappaWeb.AdminChannel`) with its own 29 kinds. It is an
+operator surface, not a client one.
+
+**Message kinds are a different axis.** `join`, `part`, `quit`, `nick_change`,
+`mode`, `privmsg`, `notice`, `action` are values of `message.kind` **inside** a
+`kind: "message"` event — which is why §4a can talk about suppressing `join` /
+`part` / `quit` while none of them appears above.
+
+**One name, two payloads:** `web_session_severed` exists on both the admin
+topic and your user topic, with different shapes. The row above describes the
+client one.
+
+---
+
+*This document tracks a live contract. When it disagrees with the code,
+the code is right — start from the module + function anchors above, and
+grep for the function name rather than trusting any line number,
+including one you may be tempted to add.*
