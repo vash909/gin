@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a small, testable improvement
+title: "feat: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and proposed scope
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and roadmap relationship
+    validations:
+      required: true
+  - type: textarea
+    id: protocol
+    attributes:
+      label: Grappa protocol references and portability considerations

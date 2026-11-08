@@ -1,0 +1,11 @@
+.build/
+.tooling/
+dist/
+__pycache__/
+*.pyc
+*.o
+*.core
+core
+.env
+.env.*
+!.env.example
