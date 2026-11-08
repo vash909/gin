@@ -1,0 +1,268 @@
+# Architecture
+
+## Scope and project boundary
+
+Gin is an **independent companion project**: a headless Unix file/FIFO frontend
+for Grappa, inspired by ii. It is not an IRC server or a direct IRC client,
+not a TUI, and not an official upstream frontend. Building it does not require
+a Grappa checkout, Elixir/BEAM, Node, or a browser application toolchain.
+
+The ecosystem proposal is upstream issue 2588. The maintainer recommended
+putting it inside the Grappa tree to track upstream changes. This repository
+instead follows the user's explicit independent-project requirement; it must
+own its compatibility checks rather than imply upstream endorsed this placement.
+The issue is discussion context, not an immutable contract.[17]
+
+The reviewed contract is pinned to upstream
+`87daa4cca9b41fbd6c5f93cb40d6848193f425f9`.
+`Grappa.Protocol.version/0` and `min_version/0` return 63 and 1 at that revision.
+Those numbers describe upstream, not implemented gin support. See
+`PROTOCOL.md` for source attribution, request shapes and compatibility gates.[2]
+
+## What exists versus what is intended
+
+| Area | Implemented scaffold | Intended later |
+| --- | --- | --- |
+| CLI | `--help`, `--version`, `init -d ROOT -n NETWORK -c TARGET` | Configuration and foreground connected operation |
+| Filesystem | Private root/network/window directories; `in` FIFO and `out` regular file | Runtime descriptor ownership, locking and lifecycle reconciliation |
+| Input | Creates FIFO only | Bounded line reader and explicit command grammar |
+| Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
+| Transport | None | Grappa REST plus Phoenix Channels over verified TLS |
+| Runtime | Initializer runs and exits | One foreground process using POSIX `poll()` |
+| Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
+
+The implemented boundary is `src/gin.c:main()` and
+`src/fs.c:gin_init()`, with the latter declared in `include/gin_fs.h`.
+Initialization does not authenticate, contact a server, claim a root lock,
+open an input reader, or send a chat message. Do not infer operational behavior
+from the presence of directories or the word `in`.
+
+## Implemented local projection
+
+```sh
+.build/gin init -d "$HOME/gin" -n azzurra -c '#grappa'
+```
+
+This creates or safely reuses:
+
+```text
+$HOME/gin/                  directory, 0700
+└── azzurra/                directory, 0700
+    └── grappa/             directory, 0700; target is #grappa
+        ├── in              named pipe (FIFO), 0600
+        └── out             ordinary regular file, 0600
+```
+
+`out` is preserved on repeated initialization. No process currently consumes
+`in`: **a shell redirection to it can block indefinitely waiting for a reader**.
+`tail -f out` has no incoming network events to show. The following is the
+future interface from the proposal, not a runnable messaging demo today:[17]
+
+```sh
+# Future only: an authenticated foreground gin must already be running.
+echo 'Hello from gin!' > "$HOME/gin/azzurra/grappa/in"
+tail -f "$HOME/gin/azzurra/grappa/out"
+```
+
+### Naming is a projection, not an IRC parser
+
+The scaffold's `map_target()` follows these exact rules:
+
+- Strip one leading `#` to obtain the channel directory. Any other target
+  receives an `@` prefix. Thus `#grappa` maps to `grappa`, peer `Alice` maps
+  to `@alice`, and synthetic `$server` maps to `@%24server`.
+- Fold only ASCII uppercase bytes. Keep `a-z`, digits, `_`, `-` and `.`;
+  percent-encode other permitted bytes using uppercase hexadecimal. Encode
+  a literal `%` too, so `%` cannot impersonate an encoded byte.
+- Reject an empty target after stripping `#`, exact `.` or `..`, a slash,
+  bytes at or below ASCII space, and DEL. Reject rather than truncate a
+  resulting component exceeding 255 bytes.
+- Network components pass `valid_network()`: 1–255 ASCII letters, digits,
+  `_` or `-`, preserving their supplied case. The initializer does not
+  discover or validate a slug against a server.
+
+Examples of the implemented mapping:
+
+| Input target | Local component | Important distinction |
+| --- | --- | --- |
+| `#Grappa` | `grappa` | ASCII case is folded |
+| `Grappa` | `@grappa` | A nick does not collide with `#grappa` |
+| `#foo[1]` | `foo%5B1%5D` | Not the same as `#foo{1}` |
+| `#foo{1}` | `foo%7B1%7D` | No RFC1459 bracket folding |
+| `#a%b` | `a%25b` | Literal percent is escaped |
+| `&local` | `@%26local` | Non-`#` target handling is not full CHANTYPES support |
+
+This is a deliberately narrow scaffold mapping. Other IRC channel prefixes,
+full reversible canonical identity, Unicode policy and runtime collision checks
+remain design work. Do not label every `@` component a proven DM or attempt to
+reconstruct wire targets by simply prepending `#` to filenames.
+
+Grappa topic keys also fold only ASCII in
+`Grappa.PubSub.Topic.channel/3`; its topics distinguish bracket variants and
+non-ASCII case. That does not mean a network's IRC CASEMAPPING can be ignored
+when querying resources. Keep explicit target metadata and use the upstream
+contract's resource semantics rather than inventing one universal fold.[8][4]
+
+### Filesystem safety boundary
+
+`root_dir()` resolves path components with directory descriptors and `openat()`;
+`O_NOFOLLOW` applies to each opened component, not only the final path.
+Root `..` components are rejected. Missing ancestor directories are not
+recursively manufactured; the parent must exist. The root, network and window
+must be private directories owned by the effective user. `private_dir()` /
+`check_dir()` reject unsafe existing directories rather than silently chmodding
+or replacing them. The initializer temporarily uses `umask(077)`.
+
+`check_endpoint()` requires owner-matching, single-link endpoints of the
+expected type and exact `0600` permissions. `in` is checked with
+`fstatat(..., AT_SYMLINK_NOFOLLOW)`. `output_file()` uses non-following,
+append-only opening, validates the resulting descriptor, and checks identity
+when reusing an existing file. It never truncates an existing log. Errors
+remain errors: gin does not delete suspicious objects to make startup succeed.
+
+These checks do **not** make an untrusted/shared-writable ancestor safe and do
+not defend against another hostile process running as the same user. Choose a
+trusted parent, do not run as root, and do not treat a successful initialization
+as a runtime lock. Initialization can leave safe partial directories after a
+failure; whole-tree transactions and crash recovery are not implemented.
+
+## Intended runtime: small core, isolated network adapter
+
+```text
+shell writers             foreground gin (planned)               Grappa
+    │                       ┌─────────────────────┐                  │
+    └── window/in FIFO ────► │ bounded input       │                  │
+                            │ explicit commands   ├── REST/TLS ─────►│
+                            │ resource/state map  │◄─ Phoenix/TLS ───┤
+    ┌── window/out file ◄─── │ escaped log output  │                  │
+    │                       │ poll + timers       │                  │
+ tail/scripts               └─────────────────────┘                  │
+```
+
+The design is portable C99 with POSIX.1-2008 interfaces, one process, foreground
+operation and `poll()`, not a daemon/TUI framework. No threads, Linux-only
+`epoll`/`inotify`, database, shell execution or language runtime are required by
+the core design. Signal handlers should only request orderly shutdown; normal
+control flow releases descriptors and private state.
+
+Proposed adapter dependencies, **not needed or linked to build the scaffold**:
+
+| Dependency | Planned responsibility |
+| --- | --- |
+| libcurl | REST requests, verified TLS, bounded responses/deadlines; multi interface for event-loop integration |
+| libwebsockets | WebSocket/TLS upgrade, frame handling and service integration |
+| Jansson | JSON encoding/decoding at the adapter boundary |
+
+These are dependency choices for future implementation, not a tested integration.
+The core should consume typed resource/events and return explicit effects;
+keep library handles and callbacks inside the adapter. Integrating two network
+libraries with one `poll()` loop needs a tested descriptor/timer ownership
+contract. Do not hide blocking login, DNS or history operations inside the FIFO
+reader and call that a nonblocking design. No Elixir or Node dependency should
+leak into build/install steps for this independent client.
+
+### State ownership and identity
+
+Maintain separate fields for authenticated subject/topic label, numeric network
+ID, network slug, original target, canonical topic key, local path component,
+window kind, server message/cursor identity and socket join generation. A
+numeric ID in a query-window command is not a slug in a REST URL; a local
+`grappa` directory is not IRC `#grappa`. Upstream uses
+`GrappaWeb.Plugs.ResolveNetwork.call/2` for slug lookup and
+`GrappaWeb.GrappaChannel.do_handle_in/3` for guarded numeric query payloads.[13][7]
+
+Filesystem presence is a local projection, not authoritative remote membership.
+Future startup must acquire one writer lock per root, discover state, join the
+user-root topic, and reconcile subscriptions/windows. User-root lifecycle
+updates must be processed even when no per-window subscription exists yet;
+otherwise pending/invited/failed windows disappear. Upstream's
+`push_user_snapshot/2` and `push_window_state_if_known/4` distinguish root
+snapshots from window subscriptions.[7]
+
+A local init/open does not request JOIN. A Phoenix topic join does not request
+IRC JOIN either. Future JOIN/PART commands use the resource actions described
+in `PROTOCOL.md`; successful membership waits for root lifecycle events.
+Query open/close uses the user topic and `query_windows_list` snapshots.
+There is no invented `parted` event to wait for.[6][7][1]
+
+Closing a remote window should stop relevant subscriptions/input acceptance,
+not erase local logs. A lost transport should leave logs readable and report
+unavailability instead of pretending the user left IRC. Retaining/moving
+closed-window directories, tombstones and restarts need an explicit policy
+before runtime implementation; the initializer currently removes nothing.
+
+### FIFO, log and delivery rules still to implement
+
+- Bound partial-line buffers, complete lines, queues, HTTP bodies and JSON
+  depth. Handle short reads/writes, EINTR/EAGAIN, EOF/reopened writers and
+  concurrent writers without spinning or silently truncating.
+- Define newline framing and an explicit small command grammar. Reject
+  unsupported commands; never pass text to a shell or raw IRC path by default.
+  Define FIFO open/keepalive behavior before advertising a running service.
+- Emit escaped terminal-safe text: peer data must not inject ANSI controls,
+  fake new status lines or paths. Distinguish `message.kind` from the outer
+  event kind and present actions without duplicating CTCP wrappers.[1][16]
+- Use the REST message door for ordinary sends. Correlate HTTP acknowledgement
+  and pushed echo/history by server identity; never report a local write or
+  202 as proof a peer received a message.[4]
+- Keep queues bounded and make disconnection/write failures visible. Do not
+  automatically retry uncertain sends and promise exactly-once delivery.
+  Use heartbeat deadlines, backoff and fresh topic joins on reconnect.
+- Fetch `/boot` and `/me` for broad resynchronization, then focused cursor
+  pages; merge live/history overlap without deduplicating equal text.[10][19][4]
+
+## Security and deferred encrypted conversations
+
+Remote transport must verify certificates and hostnames. Protect credentials
+in owner-only storage; no secrets in process arguments, FIFO diagnostics,
+URLs or logs. Phoenix auth uses a base64url bearer subprotocol, separate from
+public `client_proto` and serializer `vsn` query parameters. Source:
+`GrappaWeb.UserSocket.extract_token/1` and reference `ws_upgrade_request()`.[11][16]
+
+Encrypted queries are **unsupported**, not an excuse for a downgrade. The
+future dispatcher must carry explicit conversation mode and reject every
+unsupported encrypted send/action/history request before it can reach a plain
+message, NOTICE, CTCP or raw-command adapter. Never label ciphertext plaintext,
+acknowledge encrypted queue entries as successfully consumed without a defined
+policy, or create plaintext logs implicitly. The scaffold has no detector,
+crypto store or encrypted endpoint consumer yet.
+
+Future E2EE is a separate design and review, not a flag on TLS or the existing
+FIFO. Upstream `Grappa.Session.Wire.e2e_message/3` and the protocol's per-device
+resources require identity, keys, pairing, verification, offline queues and
+cross-client compatibility. Reuse audited cryptographic libraries, protect
+keys and require explicit decisions about decrypted log exports. Keep this
+work isolated from the dependency-free filesystem scaffold.[21][2]
+
+## Verification and drift policy
+
+Scaffold tests can verify CLI exit behavior, mapping, file types/modes,
+unsafe-object rejection and preserved logs without credentials or a server.
+They cannot establish Grappa interoperability. Future adapter tests need
+pinned golden frames, malformed/unknown payloads, rejection statuses, heartbeat
+loss, reconnect gaps, duplicate echoes and encrypted-query negative cases.
+Live tests must be opt-in against a declared upstream revision and never use
+public production credentials in CI.
+
+Before claiming a supported release, review `Grappa.Protocol`, the client
+contract, controllers and channel callbacks at a new explicit SHA; update
+fixtures and feature floors together. Do not follow a mutable `main` link or
+copy the upstream's current protocol number into gin to manufacture support.
+This independent repository must do the work that an in-tree build would
+otherwise help expose.[2]
+
+## Sources
+
+[1] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/docs/CLIENT_PROTOCOL.md
+[2] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/protocol.ex
+[4] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/messages_controller.ex
+[6] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/channels_controller.ex
+[7] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/channels/grappa_channel.ex
+[8] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/pubsub/topic.ex
+[10] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/boot_json.ex
+[11] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/channels/user_socket.ex
+[13] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/plugs/resolve_network.ex
+[16] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/frontends/shottino/shottino.c
+[17] https://github.com/vjt/grappa-irc/issues/2588
+[19] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/me_controller.ex
+[21] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/session/wire.ex

@@ -1,0 +1,115 @@
+.TH GIN 1 "November 2026" "gin 0.1.0-dev" "User Commands"
+.SH NAME
+gin \- initialize a headless file/FIFO frontend for Grappa
+.SH SYNOPSIS
+.B gin \-\-help
+.br
+.B gin \-\-version
+.br
+.B gin init \-d
+.I ROOT
+.B \-n
+.I NETWORK
+.B \-c
+.I TARGET
+.SH DESCRIPTION
+.B gin
+is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
+REST resources and Phoenix Channels events. It is not an IRC client.
+This version only creates and validates local filesystem entries.
+It makes no network connection and sends no messages.
+.SH COMMANDS
+.TP
+.B \-\-help
+Print usage and the implementation boundary.
+.TP
+.B \-\-version
+Print the software version, not a supported Grappa protocol version.
+.TP
+.B init
+Initialize one local target. All three options are required exactly once;
+option order does not matter. No daemon is started.
+.SH OPTIONS
+.TP
+.BI \-d " ROOT"
+Absolute or relative filesystem root. Its parent directories must already
+exist. Only its final component is created if missing. An existing root
+must be owned by the effective user with mode exactly 0700.
+Every explicit path component is opened relative to a directory descriptor
+with O_NOFOLLOW; symlinks and any parent traversal component (..) are rejected.
+An empty root is invalid. Dot components and repeated slashes are accepted.
+.TP
+.BI \-n " NETWORK"
+A nonempty Grappa network slug, restricted in this skeleton to ASCII
+letters, digits, underscore and hyphen, at most 255 bytes.
+Network spelling and case are preserved, not inferred from an IRC network name.
+.TP
+.BI \-c " TARGET"
+A target beginning with # is a channel; all other targets are queries.
+Only # channel prefixes are supported by this local initializer.
+The leading # is removed from channel directory names.
+Queries use a reserved @ prefix, so #grappa maps to grappa and nick grappa
+maps to @grappa. A channel named #@grappa maps to %40grappa, not @grappa.
+Only ASCII A-Z is folded to a-z; there is no locale or RFC1459 folding.
+All remaining bytes outside a-z, digits, underscore, hyphen and dot are
+encoded as uppercase %HH. Percent itself is encoded, making the mapping
+unambiguous. Non-ASCII bytes are encoded without case folding.
+Empty targets, empty channel names, single-dot and double-dot names,
+slash, ASCII whitespace and control bytes are rejected.
+The resulting directory name must fit in 255 bytes (or the filesystem's
+smaller component limit); otherwise initialization fails.
+.SH FILES
+.TP
+.I ROOT/NETWORK/WINDOW/
+Directories created with mode 0700, regardless of the caller's umask.
+.TP
+.I ROOT/NETWORK/WINDOW/in
+A FIFO with mode 0600. No reader is started: writing without a reader may
+block. Do not write commands to it expecting delivery in this version.
+.TP
+.I ROOT/NETWORK/WINDOW/out
+A regular file with mode 0600, opened with O_APPEND, never O_TRUNC.
+Existing log bytes and inode are preserved on repeated initialization.
+No events or placeholder messages are written. O_APPEND is an open flag,
+not a filesystem append-only attribute.
+.SH SECURITY
+Existing directories and endpoints must have the expected type, exact
+permissions (including no special mode bits), and effective-user ownership.
+Endpoints must have exactly one hard link. Unsafe entries are rejected,
+not replaced, followed, chmodded or repaired. Existing output entries are
+checked before opening and revalidated through the opened descriptor.
+Directory descriptors anchor child access; an output FIFO never causes
+initialization to wait for a reader.
+.PP
+This is a local-user security boundary, not a sandbox against root,
+a process sharing the same effective UID, hostile filesystem semantics,
+or concurrent changes by the owner. Keep parent directories trusted;
+permissions on ancestor directories above ROOT are not changed or required
+to be 0700. Partial safe directories or endpoints can remain after failure;
+initialization is repeatable, not transactional. There is no recursive cleanup.
+.SH EXAMPLES
+.nf
+gin init \-d ./chat \-n azzurra \-c '#grappa'
+gin init \-d ./chat \-n azzurra \-c grappa
+.fi
+The first command creates chat/azzurra/grappa/{in,out}; the second creates
+chat/azzurra/@grappa/{in,out}.
+.SH EXIT STATUS
+.TP
+.B 0
+Help, version, or local initialization succeeded. This never means connected.
+.TP
+.B 1
+Initialization failed, including an unsafe name or filesystem entry.
+.TP
+.B 2
+Invalid command-line syntax, missing/duplicate options, or unknown command.
+.SH LIMITATIONS
+Networking, authentication, configuration, the FIFO event loop,
+Phoenix wire encoding/decoding and end-to-end encryption are not implemented.
+There is no connect, run, check, or message-sending command.
+No Grappa protocol compatibility or delivery is claimed.
+.SH SEE ALSO
+.BR mkfifo (1),
+.BR tail (1),
+.BR openat (2)

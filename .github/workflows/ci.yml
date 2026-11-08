@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable:
+    name: portable (${{ matrix.os }}, ${{ matrix.cc }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            cc: gcc
+          - os: ubuntu-24.04
+            cc: clang
+          - os: macos-15
+            cc: clang
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build and test strict C99/POSIX
+        env:
+          CC: ${{ matrix.cc }}
+        run: make CC="$CC" check
+      - name: Verify staged installation behavior
+        run: python3 tests/test_install.py make
+      - name: Verify staged install and uninstall
+        run: |
+          make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
+          .build/stage/usr/bin/gin --version
+          make DESTDIR="$PWD/.build/stage" PREFIX=/usr uninstall
+          test ! -e .build/stage/usr/bin/gin
+          test ! -e .build/stage/usr/share/man/man1/gin.1
+
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install developer tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake
+      - name: musl libc
+        run: make CC=musl-gcc check
+      - name: BSD make
+        run: make clean && bmake CC=cc check
+
+  freebsd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: FreeBSD C99/POSIX tests
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        with:
+          release: '14.3'
+          usesh: true
+          prepare: pkg install -y python3
+          run: |
+            make CC=cc check
+            make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
+            .build/stage/usr/bin/gin --version
+            make DESTDIR="$PWD/.build/stage" PREFIX=/usr uninstall
+            test ! -e .build/stage/usr/bin/gin
+            test ! -e .build/stage/usr/share/man/man1/gin.1
+
+  analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install analysis tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind
+      - name: Documentation and script checks
+        run: |
+          python3 scripts/check_docs.py
+          shellcheck scripts/*.sh
+          git diff --check
+      - name: C static analysis
+        run: cppcheck --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
+      - name: ASan and UBSan
+        run: make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
+      - name: Valgrind
+        run: |
+          make clean
+          make CC=gcc check
+          sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_cli.py
+          valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
+
+  gate:
+    name: gate
+    if: always()
+    needs: [portable, compatibility, freebsd, analysis]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every prerequisite to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          failures = {name: value['result'] for name, value in results.items() if value['result'] != 'success'}
+          if failures:
+              raise SystemExit(f'Required CI jobs did not all succeed: {failures}')
+          print('All required platform and analysis jobs passed.')
+          PY
+
+  source:
+    name: source snapshot
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create source archive and checksum
+        run: |
+          mkdir -p dist
+          git archive --format=tar --prefix="gin-${GITHUB_SHA}/" HEAD | gzip -n > "dist/gin-${GITHUB_SHA}.tar.gz"
+          (cd dist && sha256sum ./*.tar.gz > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gin-source-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

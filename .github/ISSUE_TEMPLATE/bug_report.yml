@@ -1,0 +1,22 @@
+name: Bug report
+description: Report a reproducible gin defect
+title: "bug: "
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and revision
+      description: OS, compiler, make version, gin commit and Grappa revision if relevant. Do not include credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction, expected behavior and actual result
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Minimal commands or logs, with tokens and private messages removed.
