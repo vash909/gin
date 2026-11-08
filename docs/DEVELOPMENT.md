@@ -100,8 +100,22 @@ as a successful chat exchange.
 
 ## Refresh upstream references
 
-Read Grappa's current client protocol and the linked source at the revision
-recorded in [PROTOCOL.md](PROTOCOL.md). Before changing a feature floor, add
-fixtures for the actual field/action shapes and update the reference revision
-explicitly. Do not import Grappa's entire source tree or auto-regenerate a
-claimed contract from whatever happens to be on upstream main.
+Read the [offline snapshot and update policy](upstream/grappa/README.md), then
+review upstream changes at an explicit commit against that reference. Verify
+the copied files without a network connection:
+
+```sh
+(cd docs/upstream/grappa/87daa4cca9b41fbd6c5f93cb40d6848193f425f9 && sha256sum -c SHA256SUMS)
+```
+
+On macOS, use `shasum -a 256 -c SHA256SUMS` in the snapshot directory. Checksums
+verify file bytes, not upstream authenticity or runtime compatibility.
+Documentation-only changes need provenance, license, checksum and link review,
+not a local application test run. Existing required PR CI still runs normally.
+
+Keep old snapshots unchanged, add a new revision directory and update the active
+pointer and gin's guides together through a PR. Review the source linked in
+[PROTOCOL.md](PROTOCOL.md) before raising a feature floor; add implementation
+fixtures when behavior changes. Do not import Grappa's runtime source tree or
+auto-regenerate a claimed contract from upstream main. Each future release must
+record the qualification evidence specified in [COMPATIBILITY.md](COMPATIBILITY.md).
