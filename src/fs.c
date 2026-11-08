@@ -1,3 +1,8 @@
+/* Darwin hides O_NOFOLLOW with _POSIX_C_SOURCE unless this is enabled. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include "gin_fs.h"
 
 #include <errno.h>
