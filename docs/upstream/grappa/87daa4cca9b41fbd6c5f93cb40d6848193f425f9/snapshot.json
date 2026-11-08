@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/vjt/grappa-irc",
+  "revision": "87daa4cca9b41fbd6c5f93cb40d6848193f425f9",
+  "committed_at": "2026-11-08T19:18:40Z",
+  "captured_at": "2026-11-08T22:16:16Z",
+  "protocol": {
+    "version": 63,
+    "min_version": 1,
+    "source_path": "lib/grappa/protocol.ex"
+  },
+  "files": [
+    {
+      "path": "CLIENT_PROTOCOL.md",
+      "source_path": "docs/CLIENT_PROTOCOL.md",
+      "sha256": "4fd853165f1cc53e0cf7d78cd0a2e5bd3f5bb2fd7cb1a2822587a25cd7f6e035",
+      "git_blob_sha1": "b0a1a4c994ddec2cd4431e37bc461a30fd23b1f0"
+    },
+    {
+      "path": "LICENSE",
+      "source_path": "LICENSE",
+      "sha256": "44fcd312c6c93c25aeb4272d60fcaaafbcf8b5ae54eccaef5ae4dbc0381917ab",
+      "git_blob_sha1": "16750e7ddf9565283c2f593371f5b052771a9ca1"
+    }
+  ]
+}

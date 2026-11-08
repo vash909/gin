@@ -5,6 +5,10 @@
   direct IRC client, TUI or server. Keep the implementation small and Unix-like.
 - Read README.md, ROADMAP.md, docs/ARCHITECTURE.md and docs/PROTOCOL.md before
   changing behavior. Distinguish shipped code from planned protocol adapters.
+- Read docs/upstream/grappa/README.md and docs/COMPATIBILITY.md for protocol work.
+  Preserve upstream snapshot bytes and attribution; add new pinned snapshots
+  through reviewed PRs, never overwrite a retained snapshot or follow main
+  automatically. Record real protocol qualification before a release tag.
 - Write and run a failing regression/behavior test before implementation.
 - POSIX.1-2008 and strict C99 are the baseline. No GNU C extensions, Linux-only
   APIs, C++, Rust, Elixir, Node or Python runtime dependency in the executable.
@@ -19,8 +23,11 @@
   private messages or live-server writes in default tests or GitHub Actions.
 - Keep temporary builds and test trees under .build/ or the configured TMPDIR;
   do not modify unrelated services or global shell/Git configuration.
-- Run sh scripts/check.sh, inspect git diff --check and obtain independent review
-  before pushing. Record real commands/results and honest limitations in the PR.
+- Run sh scripts/check.sh for implementation changes, inspect git diff --check
+  and obtain independent review before pushing. For documentation-only changes,
+  review links, provenance, attribution and checksums as applicable; do not add
+  or run application tests solely for documentation. Existing required PR CI
+  still applies. Record actual checks and honest limitations in the PR.
 - Work on a branch, open a PR, wait for required CI on its current revision,
   then squash merge. Never bypass branch protection or force-push main.
 - Do not cut a beta/release until all relevant roadmap acceptance criteria have

@@ -1,0 +1,3 @@
+# Preserve original upstream bytes even with client-side EOL conversion.
+docs/upstream/grappa/*/CLIENT_PROTOCOL.md -text
+docs/upstream/grappa/*/LICENSE -text

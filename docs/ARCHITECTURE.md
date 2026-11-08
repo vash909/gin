@@ -248,6 +248,11 @@ Before claiming a supported release, review `Grappa.Protocol`, the client
 contract, controllers and channel callbacks at a new explicit SHA; update
 fixtures and feature floors together. Do not follow a mutable `main` link or
 copy the upstream's current protocol number into gin to manufacture support.
+The [preserved client document](upstream/grappa/README.md) and its manifest
+are frozen by full upstream revision; update the active baseline only through
+a reviewed PR and record real release qualification in
+[COMPATIBILITY.md](COMPATIBILITY.md). Never overwrite a retained snapshot or
+silently follow upstream main.
 This independent repository must do the work that an in-tree build would
 otherwise help expose.[2]
 
