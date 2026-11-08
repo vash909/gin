@@ -6,8 +6,10 @@ comments, help/errors, documentation, issues, commits and pull requests.
 1. Start from an up-to-date `main`; create a short-lived feature branch.
 2. State the behavior and acceptance criteria. Add a failing test first, then
    the smallest implementation; keep the POSIX core independent of adapters.
-3. Run `sh scripts/check.sh` locally. Additional platform CI is authoritative
-   for those platforms; a local Linux pass is not a FreeBSD or macOS pass.
+3. Run `sh scripts/check.sh` locally for implementation changes. For
+   documentation-only changes, review links, provenance, attribution and checksums
+   as applicable; no application test run is needed. Existing required CI still
+   applies. A local Linux pass is not a FreeBSD or macOS pass.
 4. Review the staged diff for correctness, secrets, portability and scope.
 5. Open a focused PR with test evidence, limitations and protocol references.
 6. Merge only when the required `gate` check passes on the current PR revision.

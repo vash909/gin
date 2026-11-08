@@ -69,6 +69,9 @@ path to a first beta; post-beta E2EE is tracked separately.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Grappa protocol contract and pinned references](docs/PROTOCOL.md)
+- [Offline upstream documentation snapshots](docs/upstream/grappa/README.md)
+- [Compatibility and release-record policy](docs/COMPATIBILITY.md)
+- [Third-party attribution](THIRD_PARTY_NOTICES.md)
 - [Security policy](SECURITY.md)
 - [Manual](man/gin.1)
 
@@ -77,5 +80,6 @@ static analysis and staged installation. Main is PR-only with a required CI
 gate, including for administrators. Passing main builds produce source archives
 and SHA-256 checksums, not signed binaries or production deployments.
 
-MIT licensed. No Grappa source is vendored. Grappa is an independent upstream
-project; gin is not an official Grappa frontend.
+MIT licensed. Only attributed protocol documentation and its upstream license
+are vendored; no Grappa runtime source is copied or linked. Grappa is an
+independent upstream project; gin is not an official Grappa frontend.

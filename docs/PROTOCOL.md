@@ -15,6 +15,14 @@ The local research inputs were upstream `docs/CLIENT_PROTOCOL.md` and
 at that pin; these are snapshot facts, not gin's implemented capabilities or
 constants to substitute for live discovery.[1][2]
 
+The complete upstream client document is also preserved as an
+[unmodified offline snapshot](upstream/grappa/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/CLIENT_PROTOCOL.md),
+with its original license and integrity manifest. The
+[snapshot policy](upstream/grappa/README.md) governs reviewed baseline updates;
+[compatibility records](COMPATIBILITY.md) distinguish this reference from actual
+release qualification. This guide interprets that frozen reference; it is not
+a rolling copy of upstream main.
+
 Numbered sources below are immutable commit links, except the explicitly
 labelled project-discussion reference in `ARCHITECTURE.md`. Module/function
 names identify the authoritative implementation; code wins over prose.
