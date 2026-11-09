@@ -25,7 +25,7 @@ Those numbers describe upstream, not implemented gin support. See
 | --- | --- | --- |
 | CLI | `--help`, `--version`, `init` and read-only `check`, explicit `-f` configuration | Foreground `run` (roadmap 6), then connected operation |
 | Filesystem | Private directories, FIFO/log and persistent root writer lock; held-root API | Runtime descriptor ownership and lifecycle reconciliation |
-| Input | Creates FIFO only | Bounded line reader and explicit command grammar |
+| Input | Bounded C reader API and safe existing-FIFO access; test-only consumer | Runtime scheduling and explicit command grammar |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
 | Transport | None | Grappa REST plus Phoenix Channels over verified TLS |
 | Runtime | Initializer runs and exits | One foreground process using POSIX `poll()` |
@@ -33,7 +33,10 @@ Those numbers describe upstream, not implemented gin support. See
 
 The implemented boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
-and `include/gin_fs.h`. The [CLI contract](CLI.md) defines explicit file loading,
+and `include/gin_fs.h`. `src/input.c` / `include/gin_input.h` provide the
+length-aware bounded input API; [INPUT.md](INPUT.md) defines exact byte, EOF,
+writer atomicity and caller-owned lifecycle contracts. No CLI calls it yet.
+The [CLI contract](CLI.md) defines explicit file loading,
 precedence, bounded grammar and exit status. `check` calls the shared lexical
 validator without probing or mutating the output filesystem. It is not a server
 probe. Future `run` stays unsupported until the actual foreground event loop
@@ -203,14 +206,14 @@ unavailability instead of pretending the user left IRC. Retaining/moving
 closed-window directories, tombstones and restarts need an explicit policy
 before runtime implementation; the initializer currently removes nothing.
 
-### FIFO, log and delivery rules still to implement
+### FIFO runtime, log and delivery rules still to implement
 
-- Bound partial-line buffers, complete lines, queues, HTTP bodies and JSON
-  depth. Handle short reads/writes, EINTR/EAGAIN, EOF/reopened writers and
-  concurrent writers without spinning or silently truncating.
-- Define newline framing and an explicit small command grammar. Reject
-  unsupported commands; never pass text to a shell or raw IRC path by default.
-  Define FIFO open/keepalive behavior before advertising a running service.
+- The [bounded input API](INPUT.md) now handles local LF records. Runtime
+  scheduling, descriptor reopen/HUP and fairness remain roadmap 6. Bound future
+  queues, HTTP bodies and JSON depth separately; no transport exists yet.
+- Define an explicit small command grammar separately. Reject unsupported
+  commands; never pass text to a shell or raw IRC path by default. Define the
+  foreground FIFO lifecycle before advertising a running service.
 - Emit escaped terminal-safe text: peer data must not inject ANSI controls,
   fake new status lines or paths. Distinguish `message.kind` from the outer
   event kind and present actions without duplicating CTCP wrappers.[1][16]

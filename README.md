@@ -7,7 +7,9 @@ ordinary files and named pipes instead of another chat UI.
 **Status: development scaffold, not a working Grappa client or a beta.**
 The executable initializes a private filesystem tree and validates explicit
 CLI/configuration settings. It does
-not authenticate, connect, consume FIFO input or send messages. Do not write to
+not authenticate, connect, consume FIFO input or send messages. A reusable
+bounded input C API and test-only FIFO consumer exist; no CLI reader runs.
+See [input policy and writer contract](docs/INPUT.md). Do not write to
 the FIFO yet: without a reader, a shell writer blocks. REST and Phoenix Channels
 are the planned transport, not direct IRC.
 

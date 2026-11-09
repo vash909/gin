@@ -25,6 +25,14 @@ int gin_root_init(const struct gin_root *root, const char *network,
                   const char *target, const char *chantypes);
 int gin_root_release(struct gin_root *root);
 
+/* Open an EXISTING window FIFO through one live, held root and shared naming.
+ * Returns caller-owned O_RDONLY|O_NONBLOCK|O_CLOEXEC fd or -1 with errno.
+ * No creation/repair/log access. Non-NULL strings; root ownership must be held
+ * in this process for the entire fd lifetime. Close fd before root release.
+ * Does not acquire/reopen/close the lock. See docs/INPUT.md and LOCKING.md. */
+int gin_root_input_open(const struct gin_root *root, const char *network,
+                         const char *target, const char *chantypes);
+
 int gin_init(const char *root, const char *network, const char *target,
              const char *chantypes);
 

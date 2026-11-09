@@ -94,6 +94,13 @@ independent roots, ordinary and SIGKILL release, persistent inode/data reuse,
 partial-layout recovery, unsafe locks and read-only checks during ownership.
 Children have bounded watchdogs and are always reaped. See
 [LOCKING.md](LOCKING.md) for the process-associated lock ownership contract.
+`tests/test_input.c`, `tests/fifo_consumer.c` and `tests/test_input.py` run in
+every `make check` path, including sanitizers. They exercise real pipes/FIFOs,
+fixed buffer bounds, invalid-record discard/resync, coalescing, EAGAIN, observed
+EOF and invisible writer handoff, cooperating atomic writers, safe access and
+root-lock retention. See [INPUT.md](INPUT.md) for the byte policy and limitations.
+Assertions remain enabled under `-DNDEBUG`. New foreign-owner cases run in the
+existing isolated privileged CI lane; non-root local runs skip them.
 No test needs credentials or a live server. Future foreground `run` remains
 unsupported until roadmap item 6 implements real descriptor/event-loop and
 signal handling; this milestone does not introduce a placeholder runtime.

@@ -28,6 +28,17 @@
   review links, provenance, attribution and checksums as applicable; do not add
   or run application tests solely for documentation. Existing required PR CI
   still applies. Record actual checks and honest limitations in the PR.
+- Minimize idle token use: never keep a model or subagent active solely to wait
+  for CI, builds, downloads or other background work. Use one bounded,
+  deterministic watcher with a completion notification, then release the turn.
+  Do not repeatedly poll status or reread worker transcripts just to wait.
+  Batch independent checks without weakening testing, review or safety gates.
+- Notify the owner through the authorized existing IRC bridge at verified task
+  completion and meaningful in-job developments, such as CI failures, blockers,
+  runner-capacity problems or a verified recovery/change of outcome. Also notify
+  for genuine pending human approvals with a delivered private approval prompt.
+  Do not send per-message/tool-call alerts, heartbeats or duplicate updates.
+  Reuse the existing connection; never reconnect or identify just for a notice.
 - Work on a branch, open a PR, wait for required CI on its current revision,
   then squash merge. Never bypass branch protection or force-push main.
 - Do not cut a beta/release until all relevant roadmap acceptance criteria have

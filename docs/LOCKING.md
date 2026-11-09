@@ -7,8 +7,9 @@ CLI/configuration and effective lexical validation, it creates or safely opens
 the root, acquires its writer lock, then creates/reuses network and window
 directories, FIFO and log. It closes all child descriptors before releasing the
 lock and root descriptor. Successful initialization does not leave a writer
-running. `gin run` is still unsupported; there is no FIFO reader, event loop,
-daemon, networking or message delivery in this milestone.
+running. `gin run` is still unsupported; there is no operational FIFO reader, event
+loop, daemon, networking or message delivery. A reusable bounded C input API
+and test-only consumer are described in [INPUT.md](INPUT.md).
 
 `gin check` remains lexical and read-only: it does not open/probe the output
 root, create or acquire a lock, or inspect whether another writer exists.
@@ -66,7 +67,9 @@ NUL-terminated; return values are zero or -1 with errno. Use:
    are validated before child mutation. It closes its child descriptors on
    return, but retains the root and lock on both success and failure. It can
    be repeated for multiple targets. There is no retained FIFO reader or log
-   writer. A future runtime must separately define its descriptor ownership.
+   writer. `gin_root_input_open()` separately opens an existing input and
+   transfers fd ownership to its caller; close it before root release. See
+   [INPUT.md](INPUT.md). A future runtime still owns scheduling and shutdown.
 3. `gin_root_release(&root)` only after all caller-owned child descriptors are
    closed. It closes lock and root, consumes/resets the handle, reports close
    errors, and permits another release of an empty handle. Interrupted closes

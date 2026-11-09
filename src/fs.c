@@ -310,6 +310,71 @@ done:
     return result;
 }
 
+/* Read-only traversal: unlike private_dir(), never creates a missing entry. */
+static int
+input_dir(int parent, const char *component)
+{
+    int fd = openat(parent, component,
+                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd != -1 && check_dir(fd) == -1) {
+        int saved = errno;
+        (void)close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+int
+gin_root_input_open(const struct gin_root *root, const char *network,
+                    const char *target, const char *chantypes)
+{
+    struct gin_name name;
+    struct stat before, opened, after;
+    int netfd = -1, winfd = -1, fd = -1, result = -1, saved;
+
+    if (root->rootfd == -1 || root->lockfd == -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1)
+        return -1;
+    netfd = input_dir(root->rootfd, name.network_component);
+    if (netfd == -1)
+        goto done;
+    winfd = input_dir(netfd, name.window_component);
+    if (winfd == -1)
+        goto done;
+    if (fstatat(winfd, "in", &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&before, 1) == -1)
+        goto done;
+    fd = openat(winfd, "in", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (fd == -1)
+        goto done;
+    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, 1) == -1 ||
+        fstatat(winfd, "in", &after, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&after, 1) == -1)
+        goto done;
+    if (before.st_dev != opened.st_dev || before.st_ino != opened.st_ino ||
+        after.st_dev != opened.st_dev || after.st_ino != opened.st_ino) {
+        errno = EPERM;
+        goto done;
+    }
+    result = fd;
+    fd = -1;
+done:
+    saved = errno;
+    if (fd != -1)
+        (void)close(fd);
+    if (winfd != -1)
+        (void)close(winfd);
+    if (netfd != -1)
+        (void)close(netfd);
+    errno = saved;
+    return result;
+}
+
 int
 gin_init(const char *path, const char *network, const char *target,
          const char *chantypes)
