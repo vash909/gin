@@ -211,17 +211,221 @@ class GinTests(unittest.TestCase):
             self.assertEqual((window / name).stat().st_uid, os.geteuid())
         self.assertEqual((window / "out").read_bytes(), b"")
 
-    def run_gin(self, *args, ok=True):
+    def run_gin(self, *args, ok=True, env=None):
         self.assertTrue(BIN.is_file(), "gin executable has not been built")
         result = subprocess.run([str(BIN), *map(str, args)],
                                 capture_output=True, text=True, timeout=5,
-                                cwd=self.base)
+                                cwd=self.base, env=env)
         if ok:
             self.assertEqual(result.returncode, 0, result.stderr)
         else:
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue(result.stderr)
         return result
+
+    def test_check_is_read_only_and_not_a_filesystem_probe(self):
+        self.run_gin("check", "-d", self.root / "missing/child",
+                     "-n", "azzurra", "-c", "#grappa")
+        self.assertFalse(self.root.exists())
+        self.root.symlink_to(self.base / "absent", target_is_directory=True)
+        self.run_gin("check", "-d", self.root, "-n", "azzurra", "-c", "#grappa")
+        self.assertTrue(self.root.is_symlink())
+
+    def test_effective_settings_errors_are_exit_two_without_mutation(self):
+        for command in ("init", "check"):
+            for root, network, target in (("", "net", "#ok"),
+                                          ("new/../root", "net", "#ok"),
+                                          ("root", "bad/name", "#ok"),
+                                          ("root", "net", "#bad/name"),
+                                          ("root\x01", "net", "#ok"),
+                                          ("x" * 4096, "net", "#ok"),
+                                          ("root", "net", "#" + "x" * 256)):
+                with self.subTest(command=command, root=root, network=network, target=target):
+                    result = self.run_gin(command, "-d", root, "-n", network,
+                                          "-c", target, ok=False)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertEqual(list(self.base.iterdir()), [])
+
+    def config(self, data, path=None):
+        path = self.base / "gin.conf" if path is None else path
+        path.write_bytes(data)
+        path.chmod(0o600)
+        return path
+
+    def test_explicit_config_precedence_and_cwd_relative_paths(self):
+        directory = self.base / "settings"
+        directory.mkdir()
+        config = self.config(b" # comment\r\n\troot = ./root \r\nnetwork=FileNet\r\ntarget=#Grappa",
+                             directory / "gin.conf")
+        original = config.read_bytes()
+        self.run_gin("check", "-f", config)
+        self.assertFalse(self.root.exists())
+        self.run_gin("init", "-n", "CliNet", "-f", config, "-c", "Alice")
+        self.assertTrue((self.root / "CliNet/@alice/out").is_file())
+        self.assertFalse((directory / "root").exists())
+        self.assertFalse((self.root / "FileNet").exists())
+        self.assertEqual(config.read_bytes(), original)
+        other = self.base / "other"
+        self.run_gin("init", "-f", config, "-d", other)
+        self.assertTrue((other / "FileNet/grappa/out").is_file())
+
+    def test_partial_config_and_cli_missing_duplicate_unknown_options(self):
+        config = self.config(b"network=net\n")
+        for command in ("init", "check"):
+            self.run_gin(command, "-f", config, "-d", self.root, "-c", "#ok")
+            for options in (("-f", config), ("-f", config, "-f", config),
+                            ("-d", self.root, "-d", self.root),
+                            ("-n", "net", "-n", "net"),
+                            ("-c", "#ok", "-c", "#ok"),
+                            ("--token", "PRIVATE_PAYLOAD"), ("-f", ""),
+                            ("-f",), ("--", "extra")):
+                with self.subTest(command=command, options=options):
+                    result = self.run_gin(command, *options, ok=False)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertNotIn("PRIVATE_PAYLOAD", result.stderr)
+        # No implicit environment or home-directory discovery.
+        result = self.run_gin("check", ok=False)
+        self.assertEqual(result.returncode, 2)
+
+    def test_config_malformed_even_when_cli_overrides_every_setting(self):
+        payloads = (b"root=root\nroot=other\n", b"network=net\nnetwork=net\n",
+                    b"target=#ok\ntarget=#ok\n", b"password=PRIVATE_PAYLOAD\n",
+                    b"PRIVATE_PAYLOAD\n", b"ROOT=root\n", b"root= \t\n",
+                    b"network=\n", b"target=\n", b"=PRIVATE_PAYLOAD\n",
+                    b"include=PRIVATE_PAYLOAD\n")
+        for data in payloads:
+            config = self.config(data)
+            before = config.read_bytes()
+            for command in ("init", "check"):
+                with self.subTest(command=command, data=data):
+                    result = self.run_gin(command, "-f", config, "-d", self.root,
+                                          "-n", "net", "-c", "#ok", ok=False)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertNotIn("PRIVATE_PAYLOAD", result.stderr)
+                    self.assertFalse(result.stdout)
+                    self.assertFalse(self.root.exists())
+                    self.assertEqual(config.read_bytes(), before)
+
+    def test_config_hash_is_not_an_inline_comment_or_shell_syntax(self):
+        config = self.config(b"root=root\nnetwork=net\ntarget=#a#b\n")
+        self.run_gin("init", "-f", config)
+        self.assertTrue((self.root / "net/a%23b/out").is_file())
+        for data in (b"root=root\nnetwork=net # comment\ntarget=#ok\n",
+                     b"root=root\nnetwork='net'\ntarget=#ok\n"):
+            self.config(data)
+            result = self.run_gin("check", "-f", config, ok=False)
+            self.assertEqual(result.returncode, 2)
+
+    def test_config_unsafe_objects_and_io_errors_are_exit_one_without_mutation(self):
+        valid = self.config(b"root=root\nnetwork=net\ntarget=#ok\n")
+        link = self.base / "symlink"
+        link.symlink_to(valid)
+        hardlink = self.base / "hardlink"
+        os.link(valid, hardlink)
+        fifo = self.base / "fifo"
+        os.mkfifo(fifo, 0o600)
+        for path in (link, hardlink, valid, fifo, self.base, self.base / "missing"):
+            for command in ("init", "check"):
+                with self.subTest(command=command, path=path.name):
+                    result = self.run_gin(command, "-f", path, "-d", self.root,
+                                          "-n", "net", "-c", "#ok", ok=False)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertFalse(self.root.exists())
+        hardlink.unlink()
+        for mode in (0o000, 0o400, 0o640, 0o644, 0o1600, 0o4600):
+            valid.chmod(mode)
+            for command in ("init", "check"):
+                result = self.run_gin(command, "-f", valid, ok=False)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(stat.S_IMODE(valid.stat().st_mode), mode)
+        valid.chmod(0o600)
+
+    @unittest.skipUnless(os.geteuid() == 0, "Changing owners requires root")
+    def test_config_foreign_owner_is_rejected(self):
+        config = self.config(b"root=root\nnetwork=net\ntarget=#ok\n")
+        os.chown(config, 65534, -1)
+        try:
+            result = self.run_gin("check", "-f", config, ok=False)
+            self.assertEqual(result.returncode, 1)
+        finally:
+            os.chown(config, os.geteuid(), -1)
+
+    def test_config_controls_nul_and_line_overflow_rejected_even_in_comments(self):
+        prefix = b"root=root\nnetwork=net\ntarget=#ok\n"
+        payloads = [prefix + b"#hidden" + bytes([byte]) + b"PRIVATE_PAYLOAD\n"
+                    for byte in (*range(9), 11, 12, *range(14, 32), 127)]
+        payloads += [prefix + b"#bad\rcomment\n", prefix + b"#bad\r",
+                     b"#" + b"a" * 8192 + b"\n", b"#" + b"a" * 16384,
+                     prefix + b"target=#other\x00\n"]
+        for data in payloads:
+            config = self.config(data)
+            for command in ("check", "init"):
+                with self.subTest(command=command, data_length=len(data)):
+                    result = self.run_gin(command, "-f", config, "-d", self.root,
+                                          "-n", "net", "-c", "#ok", ok=False)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertNotIn("PRIVATE_PAYLOAD", result.stderr)
+                    self.assertFalse(self.root.exists())
+
+    def test_config_bounds_are_exact_and_never_truncated_by_overrides(self):
+        for data in (b"#" + b"a" * 8191 + b"\n",
+                     (b"#" + b"a" * 8190 + b"\n") * 2,
+                     b"#" + b"a" * 8191 + b"\r\n",
+                     b"\n\t  \r\n# comment without final newline"):
+            config = self.config(data)
+            self.run_gin("check", "-f", config, "-d", self.root,
+                         "-n", "net", "-c", "#ok")
+        for data in ((b"#" + b"a" * 8190 + b"\n") * 2 + b"\n",
+                     b"root=" + b"r" * 4096,
+                     b"network=" + b"n" * 256,
+                     b"target=#" + b"t" * 256):
+            config = self.config(data)
+            result = self.run_gin("check", "-f", config, "-d", self.root,
+                                  "-n", "net", "-c", "#ok", ok=False)
+            self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.root.exists())
+
+    def test_effective_raw_and_encoded_boundaries(self):
+        self.run_gin("check", "-d", "r" * 4095, "-n", "n" * 255,
+                     "-c", "#" + "t" * 255)
+        config = self.config(b"root=" + b"r" * 4095 + b"\nnetwork=" + b"n" * 255 +
+                             b"\ntarget=#" + b"t" * 255)
+        self.run_gin("check", "-f", config)
+        self.run_gin("check", "-d", self.root, "-n", "net", "-c", "#" + "%" * 85)
+        for target in ("#" + "%" * 86, "t" * 255, "#" + "é" * 43):
+            result = self.run_gin("check", "-d", self.root, "-n", "net",
+                                  "-c", target, ok=False)
+            self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.root.exists())
+
+    def test_no_implicit_discovery_or_config_environment(self):
+        directory = self.base / ".config/gin"
+        directory.mkdir(parents=True)
+        config = self.config(b"root=root\nnetwork=net\ntarget=#ok\n", directory / "config")
+        self.config(config.read_bytes(), directory / "gin.conf")
+        env = dict(os.environ, HOME=str(self.base), XDG_CONFIG_HOME=str(self.base / ".config"),
+                   GIN_CONFIG=str(config), GIN_ROOT=str(self.root),
+                   GIN_NETWORK="net", GIN_TARGET="#ok")
+        result = self.run_gin("check", env=env, ok=False)
+        self.assertEqual(result.returncode, 2)
+        self.run_gin("check", "-d", self.root, "-n", "net", "-c", "#ok", env=env)
+        self.assertFalse(self.root.exists())
+
+    def test_check_and_invalid_init_preserve_existing_tree(self):
+        self.init()
+        log = self.root / "azzurra/grappa/out"
+        log.write_bytes(b"PRIVATE_HISTORY\x00\n")
+        self.root.chmod(0o755)  # check must not probe or repair unsafe output modes.
+        paths = [self.root, *sorted(self.root.rglob("*"))]
+        before = {path: path.lstat() for path in paths}
+        config = self.config(b"root=root\nnetwork=azzurra\ntarget=#grappa\n")
+        self.run_gin("check", "-f", config)
+        self.config(b"root=root\nnetwork=azzurra\ntarget=#grappa\ntoken=PRIVATE_PAYLOAD\n")
+        result = self.run_gin("init", "-f", config, ok=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("PRIVATE_PAYLOAD", result.stderr)
+        self.assertEqual({path: path.lstat() for path in paths}, before)
+        self.assertEqual(log.read_bytes(), b"PRIVATE_HISTORY\x00\n")
 
     def test_version(self):
         result = self.run_gin("--version")

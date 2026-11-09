@@ -23,7 +23,7 @@ Those numbers describe upstream, not implemented gin support. See
 
 | Area | Implemented scaffold | Intended later |
 | --- | --- | --- |
-| CLI | `--help`, `--version`, `init -d ROOT -n NETWORK -c TARGET` | Configuration and foreground connected operation |
+| CLI | `--help`, `--version`, `init` and read-only `check`, explicit `-f` configuration | Foreground `run` (roadmap 6), then connected operation |
 | Filesystem | Private root/network/window directories; `in` FIFO and `out` regular file | Runtime descriptor ownership, locking and lifecycle reconciliation |
 | Input | Creates FIFO only | Bounded line reader and explicit command grammar |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
@@ -31,8 +31,13 @@ Those numbers describe upstream, not implemented gin support. See
 | Runtime | Initializer runs and exits | One foreground process using POSIX `poll()` |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
-The implemented boundary is `src/gin.c:main()` and
-`src/fs.c:gin_init()`, with the latter declared in `include/gin_fs.h`.
+The implemented boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
+and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
+and `include/gin_fs.h`. The [CLI contract](CLI.md) defines explicit file loading,
+precedence, bounded grammar and exit status. `check` calls the shared lexical
+validator without probing or mutating the output filesystem. It is not a server
+probe. Future `run` stays unsupported until the actual foreground event loop
+lands (roadmap 6); there is no daemon or placeholder runtime.
 Initialization does not authenticate, contact a server, claim a root lock,
 open an input reader, or send a chat message. Do not infer operational behavior
 from the presence of directories or the word `in`.
