@@ -7,10 +7,13 @@ ordinary files and named pipes instead of another chat UI.
 **Status: development scaffold, not a working Grappa client or a beta.**
 The executable initializes a private filesystem tree and validates explicit
 CLI/configuration settings. It does
-not authenticate, connect, consume FIFO input or send messages. A reusable
-bounded input C API and test-only FIFO consumer exist; no CLI reader runs.
-See [input policy and writer contract](docs/INPUT.md). Do not write to
-the FIFO yet: without a reader, a shell writer blocks. REST and Phoenix Channels
+not authenticate, connect or send messages. `gin run` is a genuine local-only
+foreground FIFO reader with orderly signal shutdown and one held root lock.
+It announces transport unavailability and fails with exit 1 on the first
+nonempty complete input; no input is echoed to logs or claimed delivered.
+See [foreground runtime](docs/RUNTIME.md) and the
+[input policy and writer contract](docs/INPUT.md). Without a running reader,
+a shell FIFO writer blocks. REST and Phoenix Channels
 are the planned transport, not direct IRC.
 
 ## Build and test
@@ -76,8 +79,8 @@ a final symlink. No implicit discovery, config environment variables or
 credentials are supported. Relative paths use the invocation cwd.
 
 See [CLI/configuration](docs/CLI.md) for grammar, bounds, security, exit codes
-and the future foreground/no-daemon `gin run` contract. `run` remains unsupported
-until the roadmap's event-loop milestone; there is no fake operational command.
+and the foreground/no-daemon `gin run` contract. `run` accepts the same settings
+but implements local input only, not a connected messaging client.
 
 ## Design boundaries
 

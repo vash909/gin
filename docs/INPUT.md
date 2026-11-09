@@ -2,11 +2,12 @@
 
 ## Implemented boundary
 
-Roadmap 5 provides reusable C input groundwork, not a running reader or messaging
-service. `gin run` is unsupported. `gin init` still only initializes and exits;
+The reusable C input API is integrated into the local-only foreground
+[`gin run` runtime](RUNTIME.md), not a messaging service.
+`gin init` still only initializes and exits;
 `gin check` stays lexical/read-only. Neither command calls the input reader.
-Only the test-only C consumer exercises the API today. There is no event loop,
-command grammar, shell expansion, application/protocol dispatch, networking,
+The runtime schedules bounded parser work using poll and a signal self-pipe.
+There is no command grammar, shell expansion, protocol dispatch, networking,
 log writing or delivery acknowledgement. Leading `/`, quotes, `$`, backslashes
 and other printable bytes are literal data, not commands.
 
@@ -91,7 +92,7 @@ no-writer behavior is identical across kernels.
 Only an **observed `read() == 0`** clears partial/discard state. A partial record
 at that boundary yields one REJECTED; subsequent zero reads yield EOF, not
 repeated rejections. Complete buffered records are delivered before another
-read. Future roadmap 6 owns HUP, reopen, fairness, polling and retry scheduling;
+read. The [runtime](RUNTIME.md) owns HUP, fairness, polling and retry scheduling;
 MORE does not permit an unbounded tight event-loop drain, and EOF must not become
 a spinning HUP loop. The current API does none of that scheduling itself.
 

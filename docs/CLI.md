@@ -7,6 +7,7 @@ gin --help
 gin --version
 gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
+gin run   [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 ```
 
 `init` creates/reuses the private local projection described in [gin(1)](../man/gin.1).
@@ -118,8 +119,8 @@ separate descriptor-relative, no-symlink security boundary.
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Successful help, version, initialization or settings check; **not connectivity** |
-| 1 | Configuration I/O/unsafe file, or operational filesystem failure |
+| 0 | Successful help, version, initialization, settings check or orderly runtime shutdown; **not connectivity/delivery** |
+| 1 | Configuration I/O/unsafe file, filesystem/runtime/cleanup failure, invalid record or unsupported sending |
 | 2 | Malformed CLI/configuration, unknown command, missing/duplicate options, or invalid effective settings |
 
 CLI parsing, complete file validation and effective lexical validation finish
@@ -130,14 +131,20 @@ repaired. Error precedence is CLI syntax, explicit file read/validation, then
 effective settings: an unreadable explicit file returns 1 even if required
 settings would also be missing. Successful `check` produces no output.
 
-## Future foreground runtime (not implemented)
+## Foreground local runtime
 
-The intended invocation is
+The implemented local invocation is
 `gin run [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]`, using this same explicit
 settings/precedence contract. It is a foreground process, with no implicit
 fork, daemonization, background flag or installed service; a supervisor may
-manage it externally. Roadmap item 6 must implement and test the actual event
-loop and orderly signal shutdown before `run` becomes available. Later
-transport/authentication milestones are also required for connected operation.
-Today **`gin run` is unsupported and returns 2**, not a successful placeholder.
-No credential flow is specified or accepted by this CLI milestone.
+manage it externally. It holds one root writer lock and reads one configured
+window FIFO using POSIX poll and orderly SIGINT/SIGTERM shutdown. Before resource
+acquisition it announces startup intent and transport unavailability, not readiness;
+blocking diagnostics occur only outside runtime ownership, with original signal
+dispositions. A successful nonblocking writer open of the FIFO establishes a
+local reader. It ignores empty LF records, and fails with exit 1 on
+the first nonempty complete or rejected input record. No input is echoed to
+out or acknowledged as accepted/delivered. Signal shutdown returns 0 unless
+cleanup fails. See [RUNTIME.md](RUNTIME.md) for descriptor ownership, monotonic
+EOF backoff, signal restoration and API preconditions. Connected operation
+still requires later transport/authentication milestones; no credentials exist.

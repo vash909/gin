@@ -7,9 +7,10 @@ CLI/configuration and effective lexical validation, it creates or safely opens
 the root, acquires its writer lock, then creates/reuses network and window
 directories, FIFO and log. It closes all child descriptors before releasing the
 lock and root descriptor. Successful initialization does not leave a writer
-running. `gin run` is still unsupported; there is no operational FIFO reader, event
-loop, daemon, networking or message delivery. A reusable bounded C input API
-and test-only consumer are described in [INPUT.md](INPUT.md).
+running. `gin run` retains the same lock for the entire foreground local-only
+FIFO/event-loop lifecycle; see [RUNTIME.md](RUNTIME.md). There is no daemon,
+networking or message delivery. The bounded C input API is described in
+[INPUT.md](INPUT.md).
 
 `gin check` remains lexical and read-only: it does not open/probe the output
 root, create or acquire a lock, or inspect whether another writer exists.

@@ -4,8 +4,8 @@
 
 This is an implementation guide for **planned transport**, not a claim that
 gin can connect. The repository provides local CLI/filesystem
-initialization plus a bounded local input C API/test-only consumer: no HTTP,
-WebSocket, operational FIFO reader, message sender or E2EE. The local input
+initialization plus a bounded local input C API and local-only foreground
+runtime: no HTTP, WebSocket, message sender or E2EE. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).
 See `ARCHITECTURE.md` for the implemented boundary.
 

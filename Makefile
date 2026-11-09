@@ -11,9 +11,9 @@ PYTHON = python3
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c src/config.c src/naming.c include/gin_fs.h include/gin_config.h include/gin_naming.h
+.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -31,12 +31,35 @@ all: .build/gin
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_input.c src/input.c $(LDLIBS)
 
-check: all .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input
+.build/runtime_consumer: tests/runtime_consumer.c src/runtime.c src/input.c src/fs.c src/naming.c include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_consumer.c src/runtime.c src/input.c src/fs.c src/naming.c $(LDLIBS)
+
+.build/test_runtime_api: tests/test_runtime_api.c src/runtime.c src/input.c src/fs.c src/naming.c include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_runtime_api.c src/runtime.c src/input.c src/fs.c src/naming.c $(LDLIBS)
+
+.build/runtime_boundaries.o: src/runtime.c include/gin_runtime.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Dgin_input_next=fixture_next -Dsigprocmask=fixture_sigprocmask -c src/runtime.c -o $@
+
+.build/runtime_boundaries: tests/runtime_boundaries.c .build/runtime_boundaries.o src/input.c src/fs.c src/naming.c
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_boundaries.c .build/runtime_boundaries.o src/input.c src/fs.c src/naming.c $(LDLIBS)
+
+.build/runtime_stderr.o: src/gin.c include/gin_runtime.h include/gin_config.h include/gin_fs.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Dfputs=fixture_fputs -c src/gin.c -o $@
+
+.build/runtime_stderr: tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c $(LDLIBS)
+
+check: all .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
 	.build/test_naming
 	.build/test_input
 	$(PYTHON) tests/test_cli.py
 	$(PYTHON) tests/test_locking.py
 	$(PYTHON) tests/test_input.py
+	$(PYTHON) tests/test_runtime.py
 
 clean:
 	rm -rf .build
