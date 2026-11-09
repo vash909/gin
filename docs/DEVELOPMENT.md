@@ -77,7 +77,14 @@ installed. Running gin or activating future network access is always explicit.
 The [CLI contract](CLI.md) covers implemented `init`, read-only `check` and
 explicit bounded `-f` parsing. `tests/test_cli.py` exercises these through the
 same `make check` path used by compiler, sanitizer and platform CI gates.
-Configuration loading links only libc. Tests use private synthetic files;
+`tests/test_naming.c` is compiled and run by **every** `make check` compiler,
+sanitizer, BSD make and platform CI path. It tests canonical round trips,
+malformed/alias decoding, ASCII/Unicode distinctions, output capacities and
+raw/expanded boundaries. UTF-8 boundary cases measure bytes and expansion.
+Black-box tests cover CHANTYPES/config precedence, case-disjoint network paths,
+strict UTF-8, encoded-path symlink/hardlink/mode rejection and log/inode reuse.
+See [NAMING.md](NAMING.md) for API and pre-beta migration policy.
+Configuration loading and naming link only libc. Tests use private synthetic files;
 foreign-owner tests require root and are skipped in ordinary developer runs.
 No test needs credentials or a live server. Future foreground `run` remains
 unsupported until roadmap item 6 implements real descriptor/event-loop and

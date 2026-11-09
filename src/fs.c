@@ -4,6 +4,7 @@
 #endif
 
 #include "gin_fs.h"
+#include "gin_naming.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -11,70 +12,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-/* Only ASCII A-Z is folded, matching Grappa's topic identity. */
-static int
-map_target(const char *target, char name[256])
-{
-    static const char hex[] = "0123456789ABCDEF";
-    const unsigned char *p = (const unsigned char *)target;
-    size_t used = 0;
-
-    if (*p == '#')
-        ++p;
-    else
-        name[used++] = '@';
-    if (*p == '\0' || strcmp((const char *)p, ".") == 0 ||
-        strcmp((const char *)p, "..") == 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    for (; *p != '\0'; ++p) {
-        unsigned char c = *p;
-        if (c <= 32 || c == 127 || c == '/') {
-            errno = EINVAL;
-            return -1;
-        }
-        if (c >= 'A' && c <= 'Z')
-            c = (unsigned char)(c + ('a' - 'A'));
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-            c == '_' || c == '-' || c == '.') {
-            if (used + 1 > 255)
-                goto too_long;
-            name[used++] = (char)c;
-        } else {
-            if (used + 3 > 255)
-                goto too_long;
-            name[used++] = '%';
-            name[used++] = hex[c >> 4];
-            name[used++] = hex[c & 15];
-        }
-    }
-    name[used] = '\0';
-    return 0;
-too_long:
-    errno = ENAMETOOLONG;
-    return -1;
-}
-
-static int
-valid_network(const char *network)
-{
-    const unsigned char *p = (const unsigned char *)network;
-    size_t length = strlen(network);
-
-    if (length == 0 || length > 255)
-        goto invalid;
-    for (; *p != '\0'; ++p) {
-        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
-              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-'))
-            goto invalid;
-    }
-    return 0;
-invalid:
-    errno = EINVAL;
-    return -1;
-}
 
 static int
 check_dir(int fd)
@@ -110,11 +47,12 @@ private_dir(int parent, const char *name)
 
 /* Shared lexical contract; deliberately does not probe the filesystem. */
 int
-gin_validate(const char *root, const char *network, const char *target)
+gin_validate(const char *root, const char *network, const char *target,
+             const char *chantypes)
 {
     const unsigned char *p = (const unsigned char *)root;
     const char *scan = root;
-    char name[256];
+    struct gin_name name;
 
     if (*root == '\0' || strlen(root) > 4095 || strlen(target) > 256)
         goto invalid;
@@ -130,7 +68,7 @@ gin_validate(const char *root, const char *network, const char *target)
             goto invalid;
         scan += length;
     }
-    return valid_network(network) == -1 ? -1 : map_target(target, name);
+    return gin_name_prepare(network, target, chantypes, &name);
 invalid:
     errno = EINVAL;
     return -1;
@@ -220,26 +158,27 @@ fail:
 }
 
 int
-gin_init(const char *root, const char *network, const char *target)
+gin_init(const char *root, const char *network, const char *target,
+         const char *chantypes)
 {
     int rootfd = -1, netfd = -1, winfd = -1, outfd = -1;
     int result = -1, saved;
     mode_t oldmask;
     struct stat input;
-    char name[256];
+    struct gin_name name;
 
-    if (gin_validate(root, network, target) == -1 ||
-        map_target(target, name) == -1)
+    if (gin_validate(root, network, target, chantypes) == -1 ||
+        gin_name_prepare(network, target, chantypes, &name) == -1)
         return -1;
     oldmask = umask(077);
 
     rootfd = root_dir(root);
     if (rootfd == -1 || check_dir(rootfd) == -1)
         goto done;
-    netfd = private_dir(rootfd, network);
+    netfd = private_dir(rootfd, name.network_component);
     if (netfd == -1)
         goto done;
-    winfd = private_dir(netfd, name);
+    winfd = private_dir(netfd, name.window_component);
     if (winfd == -1)
         goto done;
     if (mkfifoat(winfd, "in", 0600) == -1 && errno != EEXIST)

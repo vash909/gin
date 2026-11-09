@@ -5,8 +5,8 @@
 ```text
 gin --help
 gin --version
-gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET]
-gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET]
+gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
+gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 ```
 
 `init` creates/reuses the private local projection described in [gin(1)](../man/gin.1).
@@ -20,8 +20,9 @@ A syntactically valid nonexistent or symlinked root can pass `check` but fail
 
 Every CLI flag takes one argument and may appear at most once, including `-f`.
 Unknown flags, operands and commands are errors. CLI settings override file
-settings regardless of flag order. All three effective settings are required;
-there are no defaults. Omitting `-f` reads no configuration file. There is no
+settings regardless of flag order. Root, network and target are required;
+CHANTYPES defaults to `#` and may explicitly be empty to disable channels.
+Omitting `-f` reads no configuration file. There is no
 implicit `~/.config` discovery and no configuration environment variables.
 Relative `FILE` and root paths use the invocation's current working directory,
 **not** the configuration file's directory. CLI values are not trimmed.
@@ -42,13 +43,15 @@ target=#grappa
 Then run `gin check -f ./gin.conf` or `gin init -f ./gin.conf -c Alice`.
 The latter overrides only the target. Files can provide any subset of settings;
 CLI flags must supply anything missing. Duplicate keys (even identical ones),
-unknown keys, empty values and malformed lines are invalid **even when CLI
-flags override every setting**. Bounds and raw-byte validation also apply to
+unknown keys, empty root/network/target values and malformed lines are invalid
+**even when CLI flags override every setting**. Bounds and raw-byte validation also apply to
 overridden file content; naming/root lexical rules apply to effective values.
 
 Grammar:
 
-- Exact case-sensitive keys: `root`, `network`, `target`; split at the first `=`.
+- Exact case-sensitive keys: `root`, `network`, `target`, `chantypes`; split at the first `=`.
+  `chantypes` permits an empty value and otherwise at most four distinct prefixes
+  from `#&+!`. CLI `-T` overrides it; duplicate empty keys/flags are still errors.
 - Trim surrounding ASCII space and tab from each key and value.
 - Ignore blank lines and lines whose first non-space/tab byte is `#`.
   No inline comments: `target=#grappa` keeps its `#` and `target=#a#b` keeps both.
@@ -70,11 +73,16 @@ Limits are byte counts, never character counts:
 | Root value | 4095 |
 | Network value | 255 |
 | Raw target value | 256 |
-| Encoded target filename | 255 |
+| CHANTYPES value (empty allowed) | 4 |
+| Encoded network or window filename | 255 |
 
 File value limits apply after surrounding space/tab trimming. No input is
 silently truncated. Target encoding may exceed 255 bytes before the raw limit
-is reached. The [manual](../man/gin.1) defines naming and root lexical rules.
+is reached. The [naming contract](NAMING.md) and [manual](../man/gin.1) define strict UTF-8
+scalar validation, reversible canonical names, channel namespaces and limits.
+Uppercase network letters are escaped, not folded; `Net` becomes `%4Eet`.
+This is an incompatible pre-beta layout change: use a new root or explicitly
+review/manual-migrate logs. Gin never renames, deletes or migrates old logs.
 Root rejects empty values, ASCII controls/DEL and any `..` path component;
 dot components and repeated slashes are accepted. `check` does not test a
 filesystem's potentially smaller path/component limits.
@@ -113,7 +121,7 @@ settings would also be missing. Successful `check` produces no output.
 ## Future foreground runtime (not implemented)
 
 The intended invocation is
-`gin run [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET]`, using this same explicit
+`gin run [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]`, using this same explicit
 settings/precedence contract. It is a foreground process, with no implicit
 fork, daemonization, background flag or installed service; a supervisor may
 manage it externally. Roadmap item 6 must implement and test the actual event

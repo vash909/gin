@@ -80,11 +80,18 @@ parse(char *data, struct gin_settings *settings)
             } else if (strcmp(key, "target") == 0) {
                 destination = settings->target;
                 capacity = sizeof(settings->target);
+            } else if (strcmp(key, "chantypes") == 0) {
+                if (settings->chantypes_present)
+                    return 2;
+                settings->chantypes_present = 1;
+                destination = settings->chantypes;
+                capacity = sizeof(settings->chantypes);
             } else {
                 return 2;
             }
             length = strlen(value);
-            if (destination[0] != '\0' || length == 0 || length >= capacity)
+            if (destination[0] != '\0' ||
+                (length == 0 && destination != settings->chantypes) || length >= capacity)
                 return 2;
             memcpy(destination, value, length + 1);
         }

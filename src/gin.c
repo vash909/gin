@@ -10,14 +10,14 @@ usage(void)
 {
     puts("Usage: gin --help | --version\n"
          "       gin init -d ROOT -n NETWORK -c TARGET\n"
-         "       gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET]\n"
-         "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET]\n\n"
+         "       gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
+         "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n\n"
          "Independent headless file/FIFO frontend for Grappa REST + Phoenix.\n"
          "init initializes local files; check validates settings, read-only.\n"
          "Neither command connects or speaks IRC; check is not a filesystem probe.\n\n"
          "CLI settings override FILE; each flag may occur at most once.\n"
          "All effective root/network/target settings are required. No discovery.\n"
-         "FILE: exact keys root/network/target in key=value lines, spaces/tabs\n"
+         "FILE: exact keys root/network/target/chantypes in key=value lines, spaces/tabs\n"
          "trimmed, whole-line # comments, no quoting/interpolation or credentials.\n"
          "FILE must be an effective-user-owned, single-link regular file, exact\n"
          "0600, no final symlink; trust its parents. Relative paths use cwd.\n"
@@ -27,10 +27,16 @@ usage(void)
          "in FIFO 0600, out regular log 0600 (opened O_APPEND, never truncated).\n"
          "Existing entries must have safe type, exact mode and effective owner.\n"
          "ROOT parents must exist; symlinks and parent traversal are rejected.\n"
-         "NETWORK uses ASCII letters, digits, '_' or '-'; spelling is preserved.\n"
-         "TARGET folds ASCII A-Z only; #grappa maps to grappa, nick grappa\n"
-         "to @grappa. Other bytes outside a-z, 0-9, '_', '-', '.' use %HH.\n"
-         "Empty names, dot names, slash, ASCII whitespace/control are rejected.\n"
+         "NETWORK uses ASCII letters, digits, '_' or '-'; uppercase is escaped\n"
+         "(A -> %41), preserving slug case without filesystem case collisions.\n"
+         "-T CHANTYPES (file chantypes): distinct subset of #&+!, default #.\n"
+         "An empty value disables channels. #grappa maps to grappa, nick Grappa\n"
+         "to @grappa; configured &Foo -> +26foo, +Foo -> +2Bfoo, !Foo -> +21foo.\n"
+         "TARGET folds ASCII A-Z only. Strict UTF-8, no Unicode normalization;\n"
+         "other bytes outside a-z, 0-9, '_', '-', '.' use uppercase %HH.\n"
+         "Empty/dot names, slash, ASCII whitespace, C0/C1 controls/DEL rejected.\n"
+         "Pre-beta uppercase network layout changed: use a new root or manually\n"
+         "migrate reviewed logs. No automatic rename/delete or original-case recovery.\n"
          "See gin(1) for naming rules and the local security boundary.\n\n"
          "Exit: 0 success (not connectivity), 1 I/O/unsafe file/filesystem failure,\n"
          "2 malformed CLI/configuration/effective settings.\n"
@@ -52,13 +58,13 @@ main(int argc, char **argv)
     if (argc > 1 && (strcmp(argv[1], "init") == 0 ||
                      strcmp(argv[1], "check") == 0)) {
         const char *root = NULL, *network = NULL, *target = NULL;
-        const char *file = NULL;
-        struct gin_settings settings = { {0}, {0}, {0} };
+        const char *file = NULL, *chantypes = NULL;
+        struct gin_settings settings = { {0}, {0}, {0}, {0}, 0 };
         int option, result;
 
         optind = 2;
         opterr = 0;
-        while ((option = getopt(argc, argv, "f:d:n:c:")) != -1) {
+        while ((option = getopt(argc, argv, "f:d:n:c:T:")) != -1) {
             switch (option) {
             case 'f':
                 if (file != NULL || *optarg == '\0')
@@ -80,6 +86,11 @@ main(int argc, char **argv)
                     goto invalid;
                 target = optarg;
                 break;
+            case 'T':
+                if (chantypes != NULL)
+                    goto invalid;
+                chantypes = optarg;
+                break;
             default: goto invalid;
             }
         }
@@ -99,11 +110,13 @@ main(int argc, char **argv)
             network = settings.network;
         if (target == NULL)
             target = settings.target;
-        if (gin_validate(root, network, target) == -1)
+        if (chantypes == NULL)
+            chantypes = settings.chantypes_present ? settings.chantypes : "#";
+        if (gin_validate(root, network, target, chantypes) == -1)
             goto invalid;
         if (strcmp(argv[1], "check") == 0)
             return 0;
-        if (gin_init(root, network, target) == -1) {
+        if (gin_init(root, network, target, chantypes) == -1) {
             perror("gin: init");
             return 1;
         }
