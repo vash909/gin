@@ -97,6 +97,7 @@ jobs:
           make CC=gcc check
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_cli.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_locking.py
+          sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_input.py
           valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
 
   gate:

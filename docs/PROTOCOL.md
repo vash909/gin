@@ -3,8 +3,10 @@
 ## Status and pinned reference
 
 This is an implementation guide for **planned transport**, not a claim that
-gin can connect. The current executable provides local CLI/filesystem
-initialization only: no HTTP, WebSocket, FIFO reader, message sender or E2EE.
+gin can connect. The repository provides local CLI/filesystem
+initialization plus a bounded local input C API/test-only consumer: no HTTP,
+WebSocket, operational FIFO reader, message sender or E2EE. The local input
+limit is not a Grappa limit; see [INPUT.md](INPUT.md).
 See `ARCHITECTURE.md` for the implemented boundary.
 
 The reviewed upstream revision is
