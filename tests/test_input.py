@@ -87,7 +87,11 @@ class InputTests(unittest.TestCase):
 
     def test_partial_eagain_coalescing_and_observed_eof(self):
         child = self.start()
-        self.assertEqual(self.next(child), (6, b''))  # no writer, no blocking
+        # Establish and close a writer before asserting EOF. A fresh FIFO can
+        # report EAGAIN before its first writer connects (for example FreeBSD).
+        probe = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK)
+        os.close(probe)
+        self.assertEqual(self.next(child), (6, b''))
         self.assertEqual(self.next(child), (6, b''))
         fd = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK)
         try:

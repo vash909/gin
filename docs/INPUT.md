@@ -83,6 +83,11 @@ is dropped. There is no internal read/retry/EOF loop.
 | EOF | read returned zero with no pending partial record; do not busy-poll |
 | ERROR | Other read failure; errno retained; caller owns recovery/close |
 
+Each call forwards the actual nonblocking read outcome: a freshly opened FIFO
+that has never had a writer can report AGAIN rather than EOF on some systems.
+The EOF tests first connect and close a real writer; they do not assume initial
+no-writer behavior is identical across kernels.
+
 Only an **observed `read() == 0`** clears partial/discard state. A partial record
 at that boundary yields one REJECTED; subsequent zero reads yield EOF, not
 repeated rejections. Complete buffered records are delivered before another
