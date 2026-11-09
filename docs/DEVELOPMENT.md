@@ -86,6 +86,14 @@ strict UTF-8, encoded-path symlink/hardlink/mode rejection and log/inode reuse.
 See [NAMING.md](NAMING.md) for API and pre-beta migration policy.
 Configuration loading and naming link only libc. Tests use private synthetic files;
 foreign-owner tests require root and are skipped in ordinary developer runs.
+`tests/lock_holder.c` and `tests/test_locking.py` also run in every `make check`
+path. The pipe-controlled C child keeps assertions enabled under `-DNDEBUG`;
+explicit readiness/release handshakes and confirmed child exit replace sleeps.
+They cover held-root API use, cross-target/relative-alias contention,
+independent roots, ordinary and SIGKILL release, persistent inode/data reuse,
+partial-layout recovery, unsafe locks and read-only checks during ownership.
+Children have bounded watchdogs and are always reaped. See
+[LOCKING.md](LOCKING.md) for the process-associated lock ownership contract.
 No test needs credentials or a live server. Future foreground `run` remains
 unsupported until roadmap item 6 implements real descriptor/event-loop and
 signal handling; this milestone does not introduce a placeholder runtime.

@@ -38,6 +38,14 @@ ls -l "$HOME/gin/azzurra/grappa/in" "$HOME/gin/azzurra/grappa/out"
 `in` is a FIFO; `out` is a regular log file, never truncated by initialization.
 Directories are private (`0700`), files and FIFOs private (`0600`). Repeated
 initialization must preserve existing log contents and reject unsafe paths.
+`init` holds a non-waiting POSIX advisory writer lock at `ROOT/.gin.lock`
+before changing any network/window/FIFO/log entry and releases it on exit.
+The private regular lock file persists unchanged; never delete it to recover.
+The kernel releases the lock on close or process death. Existing safe partial
+layouts can be completed without deleting logs. This is local-filesystem,
+cooperative locking, not a running writer or distributed/NFS guarantee.
+See [locking, recovery and API limits](docs/LOCKING.md), including POSIX
+per-process duplicate-close semantics and the trusted-parent assumption.
 
 The intended beta interface from the [original proposal](https://github.com/vjt/grappa-irc/issues/2588)
 is shown below. **This is a design example, not functionality available today:**

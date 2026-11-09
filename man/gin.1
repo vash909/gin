@@ -145,6 +145,16 @@ symlinks; they are not checked or repaired. Diagnostics do not echo file values,
 keys or paths. No protection against concurrent changes by the same UID is claimed.
 .SH FILES
 .TP
+.I ROOT/.gin.lock
+Persistent regular file, exactly 0600, effective-user-owned and single-link.
+init acquires a non-waiting POSIX fcntl F_SETLK exclusive whole-file advisory
+lock before any network/window/FIFO/log mutation and releases it after closing
+child descriptors. A conflict returns exit 1. check never probes/acquires it.
+The file's bytes are opaque and untouched, not a trusted PID record.
+Never unlink, rename, truncate or replace it to recover: the kernel releases
+ownership on close or process death, including SIGKILL. Valid partial layouts
+are completed without deleting logs or replacing existing valid FIFO/log inodes.
+.TP
 .I ROOT/NETWORK/WINDOW/
 Directories created with mode 0700, regardless of the caller's umask.
 .TP
@@ -172,6 +182,17 @@ or concurrent changes by the owner. Keep parent directories trusted;
 permissions on ancestor directories above ROOT are not changed or required
 to be 0700. Partial safe directories or endpoints can remain after failure;
 initialization is repeatable, not transactional. There is no recursive cleanup.
+.PP
+Locking is cooperative and intended for local filesystems implementing POSIX
+record locks; there is no distributed, NFS or cross-host exclusion guarantee.
+Uncooperative writers can ignore advisory locks. Locks are process-associated:
+closing any descriptor for the lock inode in the owning process releases its
+locks, even an independent/duplicate descriptor. Do not open the inode again
+or acquire a second handle for an already-held root in that process.
+Locks are not inherited across fork; handles must not be used by a child.
+No protection against same-UID namespace replacement or an untrusted parent
+renaming/replacing the root is claimed. There is no power-loss durability or
+transactional recovery guarantee, and init leaves no writer running.
 .SH EXAMPLES
 .nf
 gin init \-d ./chat \-n azzurra \-c '#grappa'

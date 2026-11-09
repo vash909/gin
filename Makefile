@@ -19,9 +19,14 @@ all: .build/gin
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_naming.c src/naming.c $(LDLIBS)
 
-check: all .build/test_naming
+.build/lock_holder: tests/lock_holder.c src/fs.c src/naming.c include/gin_fs.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/lock_holder.c src/fs.c src/naming.c $(LDLIBS)
+
+check: all .build/test_naming .build/lock_holder
 	.build/test_naming
 	$(PYTHON) tests/test_cli.py
+	$(PYTHON) tests/test_locking.py
 
 clean:
 	rm -rf .build
