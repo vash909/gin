@@ -1,22 +1,27 @@
 .TH GIN 1 "November 2026" "gin 0.1.0-dev" "User Commands"
 .SH NAME
-gin \- initialize a headless file/FIFO frontend for Grappa
+gin \- initialize local files or validate Grappa frontend settings
 .SH SYNOPSIS
 .B gin \-\-help
 .br
 .B gin \-\-version
 .br
-.B gin init \-d
-.I ROOT
-.B \-n
-.I NETWORK
-.B \-c
-.I TARGET
+.B gin init
+.RB [ \-f " FILE"]
+.RB [ \-d " ROOT"]
+.RB [ \-n " NETWORK"]
+.RB [ \-c " TARGET"]
+.br
+.B gin check
+.RB [ \-f " FILE"]
+.RB [ \-d " ROOT"]
+.RB [ \-n " NETWORK"]
+.RB [ \-c " TARGET"]
 .SH DESCRIPTION
 .B gin
 is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
 REST resources and Phoenix Channels events. It is not an IRC client.
-This version only creates and validates local filesystem entries.
+This version initializes local filesystem entries and validates settings.
 It makes no network connection and sends no messages.
 .SH COMMANDS
 .TP
@@ -27,9 +32,23 @@ Print usage and the implementation boundary.
 Print the software version, not a supported Grappa protocol version.
 .TP
 .B init
-Initialize one local target. All three options are required exactly once;
-option order does not matter. No daemon is started.
+Initialize one local target. All effective root/network/target settings are
+required, from CLI options or an explicit file. No daemon is started.
+.TP
+.B check
+Validate file syntax and effective settings only, without inspecting or
+mutating the output filesystem or contacting a server. This is not a filesystem
+or server probe: nonexistent or symlinked output roots can pass check but fail
+init. Successful check prints nothing.
+.PP
+For either command, each CLI flag may appear at most once. CLI settings override
+file settings regardless of option order. Unknown options/operands are errors.
 .SH OPTIONS
+.TP
+.BI \-f " FILE"
+Read only this explicit configuration file; no implicit discovery or config
+environment variables. Relative FILE and root paths use the invocation cwd,
+not the configuration file directory. No credentials are accepted.
 .TP
 .BI \-d " ROOT"
 Absolute or relative filesystem root. Its parent directories must already
@@ -37,7 +56,8 @@ exist. Only its final component is created if missing. An existing root
 must be owned by the effective user with mode exactly 0700.
 Every explicit path component is opened relative to a directory descriptor
 with O_NOFOLLOW; symlinks and any parent traversal component (..) are rejected.
-An empty root is invalid. Dot components and repeated slashes are accepted.
+An empty root, ASCII controls/DEL or more than 4095 bytes is invalid.
+Dot components and repeated slashes are accepted.
 .TP
 .BI \-n " NETWORK"
 A nonempty Grappa network slug, restricted in this skeleton to ASCII
@@ -56,8 +76,37 @@ encoded as uppercase %HH. Percent itself is encoded, making the mapping
 unambiguous. Non-ASCII bytes are encoded without case folding.
 Empty targets, empty channel names, single-dot and double-dot names,
 slash, ASCII whitespace and control bytes are rejected.
-The resulting directory name must fit in 255 bytes (or the filesystem's
-smaller component limit); otherwise initialization fails.
+The raw target must fit in 256 bytes and the encoded directory name in 255.
+A filesystem's smaller component limit can still cause an operational failure.
+CLI values are not trimmed.
+.SH CONFIGURATION
+FILE uses case-sensitive root, network and target keys, split at the first
+= in key=value lines. Surrounding ASCII space/tab is trimmed from keys/values.
+Blank lines and whole-line # comments (after space/tab) are ignored; there are
+no inline comments. In particular target=#grappa retains its leading #.
+LF, CRLF and an unterminated final line are accepted. Bare CR, NUL, ASCII
+controls (except formatting tab/LF/CRLF), and DEL are rejected, even in comments.
+.PP
+Duplicate keys, unknown keys, empty values, malformed lines and oversized
+content are errors even when CLI options override every setting. Files may
+provide any subset; all three effective values are required. Naming/root
+lexical validation applies to effective values, using the same validator for
+init and check. There are no defaults, includes, interpolation, shell evaluation,
+escape or quoting syntax. Quotes, backslashes, $ and ~ are literal bytes,
+not expansion operators. Do not put passwords or tokens in this file or argv.
+.PP
+Bounds in bytes: whole file 16384 including comments/line endings; each line
+8192 excluding LF/CRLF; trimmed root 4095, network 255, raw target 256 and
+encoded target name 255. No silent truncation or locale-dependent folding.
+.PP
+FILE must be effective-user-owned, regular, single-link, and exactly 0600
+including no special mode bits. It is opened read-only with O_NOFOLLOW,
+O_NONBLOCK and O_CLOEXEC, then validated by fstat before reading. Final-component
+symlinks and nonregular objects are rejected; a FIFO does not block awaiting
+a writer. The reader owns/closes its descriptor and handles EINTR/short reads.
+Configuration parent directories are trusted and resolved normally, including
+symlinks; they are not checked or repaired. Diagnostics do not echo file values,
+keys or paths. No protection against concurrent changes by the same UID is claimed.
 .SH FILES
 .TP
 .I ROOT/NETWORK/WINDOW/
@@ -97,17 +146,27 @@ chat/azzurra/@grappa/{in,out}.
 .SH EXIT STATUS
 .TP
 .B 0
-Help, version, or local initialization succeeded. This never means connected.
+Help, version, local initialization or settings check succeeded. Not connectivity.
 .TP
 .B 1
-Initialization failed, including an unsafe name or filesystem entry.
+Configuration I/O/unsafe file, or operational filesystem failure.
 .TP
 .B 2
-Invalid command-line syntax, missing/duplicate options, or unknown command.
+Malformed CLI/configuration, invalid effective settings, missing/duplicate
+options, or unknown command. Validation completes before output-tree mutation.
+CLI syntax is checked before the explicit file, then effective settings; an
+unreadable explicit file returns 1 even if effective settings would be missing.
 .SH LIMITATIONS
-Networking, authentication, configuration, the FIFO event loop,
-Phoenix wire encoding/decoding and end-to-end encryption are not implemented.
-There is no connect, run, check, or message-sending command.
+Networking, authentication, the FIFO event loop, Phoenix wire encoding/decoding
+and end-to-end encryption are not implemented. No connect or message-sending
+command exists.
+.PP
+The intended future invocation is gin run [\-f FILE] [\-d ROOT] [\-n NETWORK]
+[\-c TARGET], with the same explicit settings/precedence contract. It will run
+in the foreground without implicit forking, daemonization or a background flag;
+external supervisors may manage it. Today run is unsupported and returns 2.
+Roadmap item 6 must implement the real event loop and signal shutdown first;
+connected operation also needs later transport/authentication milestones.
 No Grappa protocol compatibility or delivery is claimed.
 .SH SEE ALSO
 .BR mkfifo (1),

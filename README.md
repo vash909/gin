@@ -5,7 +5,8 @@ inspired by [ii](https://tools.suckless.org/ii/). Portable C99 and POSIX.1-2008;
 ordinary files and named pipes instead of another chat UI.
 
 **Status: development scaffold, not a working Grappa client or a beta.**
-The executable currently initializes a private filesystem tree only. It does
+The executable initializes a private filesystem tree and validates explicit
+CLI/configuration settings. It does
 not authenticate, connect, consume FIFO input or send messages. Do not write to
 the FIFO yet: without a reader, a shell writer blocks. REST and Phoenix Channels
 are the planned transport, not direct IRC.
@@ -47,6 +48,20 @@ echo 'Hello from gin!' > "$HOME/gin/azzurra/grappa/in"
 tail -f "$HOME/gin/azzurra/grappa/out"
 ```
 
+## CLI and explicit configuration
+
+`gin check -d ./chat -n azzurra -c '#grappa'` validates settings read-only;
+it is not a filesystem or server probe. `init` and `check` accept optional
+`-f FILE` with exact `root`, `network`, `target` key=value settings. CLI flags
+override file values; all effective settings are required. The file must be
+owned by the effective user, single-link, regular and exactly `0600`, without
+a final symlink. No implicit discovery, config environment variables or
+credentials are supported. Relative paths use the invocation cwd.
+
+See [CLI/configuration](docs/CLI.md) for grammar, bounds, security, exit codes
+and the future foreground/no-daemon `gin run` contract. `run` remains unsupported
+until the roadmap's event-loop milestone; there is no fake operational command.
+
 ## Design boundaries
 
 - Independent companion repository: no Grappa checkout, submodule, BEAM, Node,
@@ -67,6 +82,7 @@ Start with [development setup](docs/DEVELOPMENT.md), [contribution rules](CONTRI
 and [agent guidance](AGENTS.md). The [20-step roadmap](ROADMAP.md) defines the
 path to a first beta; post-beta E2EE is tracked separately.
 
+- [CLI/configuration contract](docs/CLI.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Grappa protocol contract and pinned references](docs/PROTOCOL.md)
 - [Offline upstream documentation snapshots](docs/upstream/grappa/README.md)

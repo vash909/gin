@@ -72,6 +72,17 @@ Normal installation can use `PREFIX="$HOME/.local"` without sudo. The manual
 is installed under `share/man/man1`. No service or shell startup integration is
 installed. Running gin or activating future network access is always explicit.
 
+## CLI/configuration scope
+
+The [CLI contract](CLI.md) covers implemented `init`, read-only `check` and
+explicit bounded `-f` parsing. `tests/test_cli.py` exercises these through the
+same `make check` path used by compiler, sanitizer and platform CI gates.
+Configuration loading links only libc. Tests use private synthetic files;
+foreign-owner tests require root and are skipped in ordinary developer runs.
+No test needs credentials or a live server. Future foreground `run` remains
+unsupported until roadmap item 6 implements real descriptor/event-loop and
+signal handling; this milestone does not introduce a placeholder runtime.
+
 ## GitHub workflow
 
 Work on a branch and open a PR. Main requires a PR and the successful `gate`

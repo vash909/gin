@@ -108,28 +108,40 @@ private_dir(int parent, const char *name)
     return fd;
 }
 
+/* Shared lexical contract; deliberately does not probe the filesystem. */
+int
+gin_validate(const char *root, const char *network, const char *target)
+{
+    const unsigned char *p = (const unsigned char *)root;
+    const char *scan = root;
+    char name[256];
+
+    if (*root == '\0' || strlen(root) > 4095 || strlen(target) > 256)
+        goto invalid;
+    for (; *p != '\0'; ++p) {
+        if (*p < 32 || *p == 127)
+            goto invalid;
+    }
+    while (*scan != '\0') {
+        size_t length;
+        scan += strspn(scan, "/");
+        length = strcspn(scan, "/");
+        if (length == 2 && scan[0] == '.' && scan[1] == '.')
+            goto invalid;
+        scan += length;
+    }
+    return valid_network(network) == -1 ? -1 : map_target(target, name);
+invalid:
+    errno = EINVAL;
+    return -1;
+}
+
 /* Resolve each component separately: O_NOFOLLOW on a full path is insufficient. */
 static int
 root_dir(const char *root)
 {
     char *copy, *part, *next, *state = NULL;
     int fd, saved;
-    const char *scan = root;
-
-    if (*scan == '\0') {
-        errno = EINVAL;
-        return -1;
-    }
-    while (*scan != '\0') {
-        size_t length;
-        scan += strspn(scan, "/");
-        length = strcspn(scan, "/");
-        if (length == 2 && scan[0] == '.' && scan[1] == '.') {
-            errno = EINVAL;
-            return -1;
-        }
-        scan += length;
-    }
     copy = strdup(root);
     if (copy == NULL)
         return -1;
@@ -216,7 +228,8 @@ gin_init(const char *root, const char *network, const char *target)
     struct stat input;
     char name[256];
 
-    if (valid_network(network) == -1 || map_target(target, name) == -1)
+    if (gin_validate(root, network, target) == -1 ||
+        map_target(target, name) == -1)
         return -1;
     oldmask = umask(077);
 

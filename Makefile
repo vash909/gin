@@ -11,9 +11,9 @@ PYTHON = python3
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c include/gin_fs.h
+.build/gin: src/gin.c src/fs.c src/config.c include/gin_fs.h include/gin_config.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c $(LDLIBS)
 
 check: all
 	$(PYTHON) tests/test_cli.py
