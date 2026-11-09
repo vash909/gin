@@ -11,11 +11,16 @@ PYTHON = python3
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c src/config.c include/gin_fs.h include/gin_config.h
+.build/gin: src/gin.c src/fs.c src/config.c src/naming.c include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c $(LDLIBS)
 
-check: all
+.build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_naming.c src/naming.c $(LDLIBS)
+
+check: all .build/test_naming
+	.build/test_naming
 	$(PYTHON) tests/test_cli.py
 
 clean:

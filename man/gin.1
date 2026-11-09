@@ -11,12 +11,14 @@ gin \- initialize local files or validate Grappa frontend settings
 .RB [ \-d " ROOT"]
 .RB [ \-n " NETWORK"]
 .RB [ \-c " TARGET"]
+.RB [ \-T " CHANTYPES"]
 .br
 .B gin check
 .RB [ \-f " FILE"]
 .RB [ \-d " ROOT"]
 .RB [ \-n " NETWORK"]
 .RB [ \-c " TARGET"]
+.RB [ \-T " CHANTYPES"]
 .SH DESCRIPTION
 .B gin
 is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
@@ -63,41 +65,75 @@ Dot components and repeated slashes are accepted.
 A nonempty Grappa network slug, restricted in this skeleton to ASCII
 letters, digits, underscore and hyphen, at most 255 bytes.
 Network spelling and case are preserved, not inferred from an IRC network name.
+In filenames, lowercase letters, digits, underscore and hyphen stay literal;
+uppercase letters use uppercase %HH (Net becomes %4Eet). The expanded component
+must also fit 255 bytes. This avoids filesystem case collisions without folding
+slugs or inventing numeric network IDs.
+.TP
+.BI \-T " CHANTYPES"
+Distinct subset of ASCII #&+!, at most four bytes; default #.
+An explicitly empty value disables channels. Duplicate/foreign/control prefixes
+are invalid. Overrides file chantypes. Duplicate flags/keys are errors even
+when the first value is empty. File values are trimmed; CLI values are not.
+Keep this setting stable when reusing a root.
 .TP
 .BI \-c " TARGET"
-A target beginning with # is a channel; all other targets are queries.
-Only # channel prefixes are supported by this local initializer.
-The leading # is removed from channel directory names.
-Queries use a reserved @ prefix, so #grappa maps to grappa and nick grappa
-maps to @grappa. A channel named #@grappa maps to %40grappa, not @grappa.
-Only ASCII A-Z is folded to a-z; there is no locale or RFC1459 folding.
-All remaining bytes outside a-z, digits, underscore, hyphen and dot are
-encoded as uppercase %HH. Percent itself is encoded, making the mapping
-unambiguous. Non-ASCII bytes are encoded without case folding.
-Empty targets, empty channel names, single-dot and double-dot names,
-slash, ASCII whitespace and control bytes are rejected.
-The raw target must fit in 256 bytes and the encoded directory name in 255.
-A filesystem's smaller component limit can still cause an operational failure.
-CLI values are not trimmed.
+A target is a channel only if its first byte is in CHANTYPES. Other targets
+are nonchannels (queries or synthetic windows, not proof of a DM).
+Fold ASCII A-Z only, unconditionally for channels and nonchannels, independently
+of IRC CASEMAPPING. No RFC1459 bracket folding or Unicode normalization/casefold.
+Preserve original wire spelling separately from canonical identity.
+.PP
+Strip one configured channel prefix. A # channel has no namespace marker;
+other configured prefixes use literal + followed by uppercase prefix hex:
+&Foo becomes +26foo, +Foo becomes +2Bfoo, !Foo becomes +21foo.
+Nonchannels use @: Grappa becomes @grappa. With default CHANTYPES,
+&Foo becomes @%26foo. With empty CHANTYPES, #Foo becomes @%23foo.
+Body bytes outside a-z, digits, underscore, hyphen and dot use uppercase %HH,
+including literal percent, plus, @ and every non-ASCII byte.
+Thus #+26foo becomes %2B26foo and cannot collide with configured &Foo.
+.PP
+Require strict UTF-8 scalar sequences; reject overlong, truncated, surrogate,
+above-U+10FFFF and invalid continuation encodings. Reject C0/C1 controls, DEL,
+ASCII whitespace, slash and empty or exact dot/dotdot bodies.
+Valid non-ASCII bytes are preserved without normalization, then escaped:
+#é becomes %C3%A9; decomposed #é becomes e%CC%81; #É becomes %C3%89.
+Raw targets must fit 256 bytes, encoded components 255 bytes including any
+namespace marker, excluding NUL. Never truncate or hash. A filesystem's smaller
+limit can still fail operationally. Root lexical rules are unchanged.
+.PP
+The strict decoder returns the original network slug or canonical target,
+not original target letter casing. It requires matching CHANTYPES and rejects
+malformed/lowercase/unnecessary escapes and namespace aliases by exact
+re-encoding. No old arbitrary-byte/original-casing recovery is promised.
+.PP
+Pre-beta layout change: uppercase network slugs have new escaped paths.
+Use a new root or perform an explicit reviewed manual migration of logs.
+Gin never automatically renames, deletes, merges or migrates old logs, and
+has no legacy-path fallback. Back up logs and stop writers before manual work.
+Common lowercase-network/default #channel and query paths remain compatible.
 .SH CONFIGURATION
-FILE uses case-sensitive root, network and target keys, split at the first
+FILE uses case-sensitive root, network, target and chantypes keys, split at the first
 = in key=value lines. Surrounding ASCII space/tab is trimmed from keys/values.
 Blank lines and whole-line # comments (after space/tab) are ignored; there are
 no inline comments. In particular target=#grappa retains its leading #.
 LF, CRLF and an unterminated final line are accepted. Bare CR, NUL, ASCII
 controls (except formatting tab/LF/CRLF), and DEL are rejected, even in comments.
 .PP
-Duplicate keys, unknown keys, empty values, malformed lines and oversized
+Duplicate keys, unknown keys, empty root/network/target values, malformed lines and oversized
 content are errors even when CLI options override every setting. Files may
 provide any subset; all three effective values are required. Naming/root
 lexical validation applies to effective values, using the same validator for
-init and check. There are no defaults, includes, interpolation, shell evaluation,
+init and check. CHANTYPES defaults to #; root/network/target have no defaults.
+There are no includes, interpolation, shell evaluation,
 escape or quoting syntax. Quotes, backslashes, $ and ~ are literal bytes,
 not expansion operators. Do not put passwords or tokens in this file or argv.
 .PP
 Bounds in bytes: whole file 16384 including comments/line endings; each line
 8192 excluding LF/CRLF; trimmed root 4095, network 255, raw target 256 and
-encoded target name 255. No silent truncation or locale-dependent folding.
+chantypes 4 (empty allowed), encoded network/window names 255.
+Strict UTF-8 applies to effective targets; comments and overridden values keep
+the raw-byte grammar above. No silent truncation or locale-dependent folding.
 .PP
 FILE must be effective-user-owned, regular, single-link, and exactly 0600
 including no special mode bits. It is opened read-only with O_NOFOLLOW,
@@ -162,7 +198,7 @@ and end-to-end encryption are not implemented. No connect or message-sending
 command exists.
 .PP
 The intended future invocation is gin run [\-f FILE] [\-d ROOT] [\-n NETWORK]
-[\-c TARGET], with the same explicit settings/precedence contract. It will run
+[\-c TARGET] [\-T CHANTYPES], with the same explicit settings/precedence contract. It will run
 in the foreground without implicit forking, daemonization or a background flag;
 external supervisors may manage it. Today run is unsupported and returns 2.
 Roadmap item 6 must implement the real event loop and signal shutdown first;

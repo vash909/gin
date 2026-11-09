@@ -71,42 +71,35 @@ tail -f "$HOME/gin/azzurra/grappa/out"
 
 ### Naming is a projection, not an IRC parser
 
-The scaffold's `map_target()` follows these exact rules:
+`src/naming.c` / `include/gin_naming.h` implement the shared reversible codec
+used by both lexical validation and initialization. `struct gin_name` separates
+the immutable input network slug and original wire target from canonical
+Grappa identity, encoded network/window components and channel/nonchannel kind.
+Nonchannel includes synthetic windows, not just proven DMs. No numeric network
+ID is inferred; actual discovery remains roadmap 10.
 
-- Strip one leading `#` to obtain the channel directory. Any other target
-  receives an `@` prefix. Thus `#grappa` maps to `grappa`, peer `Alice` maps
-  to `@alice`, and synthetic `$server` maps to `@%24server`.
-- Fold only ASCII uppercase bytes. Keep `a-z`, digits, `_`, `-` and `.`;
-  percent-encode other permitted bytes using uppercase hexadecimal. Encode
-  a literal `%` too, so `%` cannot impersonate an encoded byte.
-- Reject an empty target after stripping `#`, exact `.` or `..`, a slash,
-  bytes at or below ASCII space, and DEL. Reject rather than truncate a
-  resulting component exceeding 255 bytes.
-- Network components pass `valid_network()`: 1–255 ASCII letters, digits,
-  `_` or `-`, preserving their supplied case. The initializer does not
-  discover or validate a slug against a server.
+Configured `-T CHANTYPES` / file `chantypes` is a distinct subset of `#&+!`,
+default `#`, optionally empty. Default `#Grappa` -> `grappa`, query `Grappa` ->
+`@grappa`; configured `&Foo` -> `+26foo`, `+Foo` -> `+2Bfoo`, `!Foo` -> `+21foo`.
+Literal plus is escaped, keeping those namespaces disjoint from `#` channels.
+Only ASCII A–Z target bytes fold, unconditionally for channel and nick/window
+identity per `Grappa.PubSub.Topic.channel/3`.[8] Brackets and non-ASCII case stay
+distinct; no RFC1459 fold or Unicode normalization is applied, independently of
+IRC network CASEMAPPING. Original wire casing is retained separately, not
+recoverable from a canonical filename.
 
-Examples of the implemented mapping:
+Targets require strict UTF-8 scalars and reject C0/C1 controls, DEL, ASCII
+whitespace, slash and empty/dot/dotdot bodies. All non-ASCII bytes become
+uppercase `%HH`, preserving NFC/NFD distinctions on normalization-insensitive
+filesystems. Network slugs retain ASCII letter/digit/underscore/hyphen input
+syntax and exact case; uppercase letters are escaped (`Net` -> `%4Eet`), not
+folded. Decoder APIs reject aliases by exact canonical re-encoding. Raw bounds
+are unchanged; both expanded components must fit 255 bytes without truncation.
+See [NAMING.md](NAMING.md) for API requirements, examples and the full policy.
 
-| Input target | Local component | Important distinction |
-| --- | --- | --- |
-| `#Grappa` | `grappa` | ASCII case is folded |
-| `Grappa` | `@grappa` | A nick does not collide with `#grappa` |
-| `#foo[1]` | `foo%5B1%5D` | Not the same as `#foo{1}` |
-| `#foo{1}` | `foo%7B1%7D` | No RFC1459 bracket folding |
-| `#a%b` | `a%25b` | Literal percent is escaped |
-| `&local` | `@%26local` | Non-`#` target handling is not full CHANTYPES support |
-
-This is a deliberately narrow scaffold mapping. Other IRC channel prefixes,
-full reversible canonical identity, Unicode policy and runtime collision checks
-remain design work. Do not label every `@` component a proven DM or attempt to
-reconstruct wire targets by simply prepending `#` to filenames.
-
-Grappa topic keys also fold only ASCII in
-`Grappa.PubSub.Topic.channel/3`; its topics distinguish bracket variants and
-non-ASCII case. That does not mean a network's IRC CASEMAPPING can be ignored
-when querying resources. Keep explicit target metadata and use the upstream
-contract's resource semantics rather than inventing one universal fold.[8][4]
+**Pre-beta migration boundary:** uppercase-network paths changed. Select a new
+root or explicitly review/manual-migrate existing logs. No legacy-path fallback,
+automatic migration, renaming, deletion, database or metadata framework exists.
 
 ### Filesystem safety boundary
 

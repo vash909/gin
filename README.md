@@ -52,8 +52,15 @@ tail -f "$HOME/gin/azzurra/grappa/out"
 
 `gin check -d ./chat -n azzurra -c '#grappa'` validates settings read-only;
 it is not a filesystem or server probe. `init` and `check` accept optional
-`-f FILE` with exact `root`, `network`, `target` key=value settings. CLI flags
-override file values; all effective settings are required. The file must be
+`-f FILE` with exact `root`, `network`, `target`, `chantypes` key=value settings.
+`-T CHANTYPES` overrides file `chantypes`: a distinct subset of `#&+!`, default
+`#`; an empty value disables channels. Targets use strict UTF-8 and ASCII-only
+identity folding. See the [reversible naming contract](docs/NAMING.md).
+**Pre-beta layout change:** uppercase network letters are escaped (`Net` ->
+`%4Eet`) to prevent case-insensitive filesystem collisions while preserving
+slug case. Use a new root or a reviewed manual migration; gin never renames,
+deletes or automatically migrates old logs. CLI flags
+override file values; effective root/network/target settings are required. The file must be
 owned by the effective user, single-link, regular and exactly `0600`, without
 a final symlink. No implicit discovery, config environment variables or
 credentials are supported. Relative paths use the invocation cwd.

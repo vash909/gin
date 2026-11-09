@@ -98,15 +98,19 @@ class GinTests(unittest.TestCase):
 
     @unittest.skipUnless(os.geteuid() == 0, "Changing owners requires root; run this test with sudo")
     def test_foreign_owners_are_rejected(self):
-        self.init()
-        for path in (self.root, self.root / "azzurra", self.root / "azzurra/grappa",
-                     self.root / "azzurra/grappa/in", self.root / "azzurra/grappa/out"):
-            with self.subTest(path=str(path.relative_to(self.base))):
-                os.chown(path, 65534, -1)
-                try:
-                    self.init(ok=False)
-                finally:
-                    os.chown(path, os.geteuid(), -1)
+        for network, target, options, relative in (
+                ("azzurra", "#grappa", (), "azzurra/grappa"),
+                ("Net", "&Foo", ("-T", "#&"), "%4Eet/+26foo")):
+            args = ("init", "-d", self.root, "-n", network, "-c", target, *options)
+            self.run_gin(*args)
+            window = self.root / relative
+            for path in (self.root, window.parent, window, window / "in", window / "out"):
+                with self.subTest(path=str(path.relative_to(self.base))):
+                    os.chown(path, 65534, -1)
+                    try:
+                        self.run_gin(*args, ok=False)
+                    finally:
+                        os.chown(path, os.geteuid(), -1)
 
     def test_invalid_cli_is_usage_error_without_side_effects(self):
         commands = [(), ("check",), ("run",), ("--help", "extra"),
@@ -185,7 +189,7 @@ class GinTests(unittest.TestCase):
 
     def test_relative_root_and_reordered_options(self):
         self.run_gin("init", "-c", "#grappa", "-n", "Azzurra", "-d", "./root//")
-        self.assertTrue((self.root / "Azzurra/grappa/out").is_file())
+        self.assertTrue((self.root / "%41zzurra/grappa/out").is_file())
 
     def test_missing_root_parent_is_not_recursively_created(self):
         self.init(root=self.base / "missing/child", ok=False)
@@ -261,13 +265,13 @@ class GinTests(unittest.TestCase):
         self.run_gin("check", "-f", config)
         self.assertFalse(self.root.exists())
         self.run_gin("init", "-n", "CliNet", "-f", config, "-c", "Alice")
-        self.assertTrue((self.root / "CliNet/@alice/out").is_file())
+        self.assertTrue((self.root / "%43li%4Eet/@alice/out").is_file())
         self.assertFalse((directory / "root").exists())
         self.assertFalse((self.root / "FileNet").exists())
         self.assertEqual(config.read_bytes(), original)
         other = self.base / "other"
         self.run_gin("init", "-f", config, "-d", other)
-        self.assertTrue((other / "FileNet/grappa/out").is_file())
+        self.assertTrue((other / "%46ile%4Eet/grappa/out").is_file())
 
     def test_partial_config_and_cli_missing_duplicate_unknown_options(self):
         config = self.config(b"network=net\n")
@@ -427,6 +431,116 @@ class GinTests(unittest.TestCase):
         self.assertEqual({path: path.lstat() for path in paths}, before)
         self.assertEqual(log.read_bytes(), b"PRIVATE_HISTORY\x00\n")
 
+    def test_configured_channel_types_and_network_case_are_disjoint(self):
+        targets = {"#Foo": "foo", "&Foo": "+26foo", "+Foo": "+2Bfoo",
+                   "!Foo": "+21foo", "#+26foo": "%2B26foo", "Foo": "@foo"}
+        for network, encoded in (("net", "net"), ("Net", "%4Eet"), ("NET", "%4E%45%54")):
+            for target, window in targets.items():
+                self.run_gin("init", "-d", self.root, "-n", network, "-c", target,
+                             "-T", "#&+!")
+                log = self.root / encoded / window / "out"
+                self.assertTrue(log.is_file())
+                log.write_bytes(target.encode())
+                inode = log.stat().st_ino
+                self.run_gin("init", "-T", "!+#&", "-d", self.root,
+                             "-n", network, "-c", target)
+                self.assertEqual(log.stat().st_ino, inode)
+                self.assertEqual(log.read_bytes(), target.encode())
+        self.assertEqual(len(list(self.root.iterdir())), 3)
+
+    def test_chantypes_config_empty_precedence_and_duplicates(self):
+        config = self.config(b"root=root\nnetwork=net\ntarget=&Foo\nchantypes=#&+!\n")
+        self.run_gin("init", "-f", config)
+        self.assertTrue((self.root / "net/+26foo/out").exists())
+        self.run_gin("init", "-f", config, "-T", "")
+        self.assertTrue((self.root / "net/@%26foo/out").exists())
+        self.config(b"root=root\nnetwork=net\ntarget=#Foo\nchantypes=\n")
+        self.run_gin("init", "-f", config)
+        self.assertTrue((self.root / "net/@%23foo/out").exists())
+        self.run_gin("init", "-f", config, "-T", "#")
+        self.assertTrue((self.root / "net/foo/out").exists())
+        for value in ("##", "#x", "#&+!!", "é", " ", "#\t", "#\x7f"):
+            result = self.run_gin("check", "-f", config, "-T", value, ok=False)
+            self.assertEqual(result.returncode, 2)
+        for options in (("-T", "", "-T", "#"), ("-T", "#", "-T", "#")):
+            self.assertEqual(self.run_gin("check", "-f", config, *options, ok=False).returncode, 2)
+        for data in (b"chantypes=\nchantypes=#\n", b"chantypes=#\nchantypes=#\n",
+                     b"chantypes=12345\n"):
+            self.config(data)
+            self.assertEqual(self.run_gin("check", "-f", config, "-d", self.root,
+                                         "-n", "net", "-c", "ok", "-T", "#", ok=False).returncode, 2)
+        # Semantic validation is on effective values, grammar/bounds on every file value.
+        self.config(b"chantypes=x\n")
+        self.run_gin("check", "-f", config, "-d", self.root, "-n", "net", "-c", "ok", "-T", "#")
+
+    def test_utf8_scalars_and_expanded_network_bounds_before_mutation(self):
+        invalid = [b"#\xc0\x80", b"#\xe0\x80\x80", b"#\xed\xa0\x80", b"#\xf4\x90\x80\x80",
+                   b"#\xe2\x82", b"#\x80", b"#\xc2\x80", b"#\xc2\x9f"]
+        for command in ("init", "check"):
+            for target in invalid:
+                config = self.config(b"root=root\nnetwork=net\ntarget=" + target + b"\n")
+                self.assertEqual(self.run_gin(command, "-f", config, ok=False).returncode, 2)
+                self.assertFalse(self.root.exists())
+            self.run_gin(command, "-d", self.root, "-n", "A" * (255 // 3), "-c", "#ok")
+            other = self.base / "absent"
+            self.assertEqual(self.run_gin(command, "-d", other, "-n", "A" * (255 // 3 + 1),
+                                         "-c", "#ok", ok=False).returncode, 2)
+            self.assertFalse(other.exists())
+            if self.root.exists():
+                import shutil
+                shutil.rmtree(self.root)
+        for target, component in (("#é", "%C3%A9"), ("#é", "e%CC%81"),
+                                  ("#É", "%C3%89"), ("#😀", "%F0%9F%98%80")):
+            self.init(target=target)
+            self.assertTrue((self.root / "azzurra" / component / "out").exists())
+        names = [p.name.casefold() for p in (self.root / "azzurra").iterdir()]
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_encoded_paths_keep_descriptor_security_and_log_identity(self):
+        for kind in ("network-symlink", "window-symlink", "in-symlink", "out-symlink", "out-hardlink", "mode"):
+            self.root = self.base / kind
+            args = ("init", "-d", self.root, "-n", "Net", "-c", "&Foo", "-T", "#&")
+            self.run_gin(*args)
+            window = self.root / "%4Eet/+26foo"
+            log = window / "out"
+            log.write_bytes(b"encoded history\x00\n")
+            before = {n: (window / n).stat().st_ino for n in ("in", "out")}
+            self.run_gin(*args)
+            self.assertEqual({n: (window / n).stat().st_ino for n in before}, before)
+            victim = self.base / (kind + "-victim")
+            victim.write_bytes(b"keep victim\n")
+            victim.chmod(0o600)
+            if kind == "network-symlink":
+                network = window.parent
+                network.rename(self.root / "saved")
+                network.symlink_to(self.root / "saved", target_is_directory=True)
+            elif kind == "window-symlink":
+                window.rename(window.parent / "saved")
+                window.symlink_to(window.parent / "saved", target_is_directory=True)
+            elif kind == "mode":
+                window.chmod(0o750)
+            else:
+                endpoint = window / ("in" if kind == "in-symlink" else "out")
+                endpoint.unlink()
+                if kind == "out-hardlink":
+                    os.link(victim, endpoint)
+                else:
+                    endpoint.symlink_to(victim)
+            paths = [self.root, *self.root.rglob("*")]
+            metadata = {p: p.lstat() for p in paths}
+            self.assertEqual(self.run_gin(*args, ok=False).returncode, 1)
+            self.run_gin("check", *args[1:])
+            self.assertEqual({p: p.lstat() for p in paths}, metadata)
+            self.assertEqual(victim.read_bytes(), b"keep victim\n")
+            if kind not in ("out-symlink", "out-hardlink"):
+                if kind == "network-symlink":
+                    log = self.root / "saved/+26foo/out"
+                elif kind == "window-symlink":
+                    log = window.parent / "saved/out"
+                self.assertEqual(log.read_bytes(), b"encoded history\x00\n")
+            if kind == "mode":
+                window.chmod(0o700)
+
     def test_version(self):
         result = self.run_gin("--version")
         self.assertEqual(result.stdout, "gin 0.1.0-dev\n")
@@ -438,6 +552,9 @@ class GinTests(unittest.TestCase):
         self.assertIn("REST + Phoenix", result.stdout)
         self.assertIn("not implemented", result.stdout)
         self.assertIn("ASCII A-Z", result.stdout)
+        self.assertIn("-T CHANTYPES", result.stdout)
+        self.assertIn("UTF-8", result.stdout)
+        self.assertIn("%41", result.stdout)
         self.assertIn("@grappa", result.stdout)
         self.assertIn("0700", result.stdout)
         self.assertIn("0600", result.stdout)
