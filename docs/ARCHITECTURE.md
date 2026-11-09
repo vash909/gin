@@ -23,24 +23,25 @@ Those numbers describe upstream, not implemented gin support. See
 
 | Area | Implemented scaffold | Intended later |
 | --- | --- | --- |
-| CLI | `--help`, `--version`, `init` and read-only `check`, explicit `-f` configuration | Foreground `run` (roadmap 6), then connected operation |
-| Filesystem | Private directories, FIFO/log and persistent root writer lock; held-root API | Runtime descriptor ownership and lifecycle reconciliation |
-| Input | Bounded C reader API and safe existing-FIFO access; test-only consumer | Runtime scheduling and explicit command grammar |
+| CLI | `--help`, `--version`, `init`, read-only `check`, local-only `run`, explicit `-f` configuration | Connected operation |
+| Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
+| Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
 | Transport | None | Grappa REST plus Phoenix Channels over verified TLS |
-| Runtime | Initializer runs and exits | One foreground process using POSIX `poll()` |
+| Runtime | One foreground local-only process using POSIX `poll()` and signal self-pipe | Network adapter integration |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
 The implemented boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
 and `include/gin_fs.h`. `src/input.c` / `include/gin_input.h` provide the
 length-aware bounded input API; [INPUT.md](INPUT.md) defines exact byte, EOF,
-writer atomicity and caller-owned lifecycle contracts. No CLI calls it yet.
+writer atomicity and caller-owned lifecycle contracts. `run` integrates it through
+`include/gin_runtime.h` / `src/runtime.c`; see [RUNTIME.md](RUNTIME.md).
 The [CLI contract](CLI.md) defines explicit file loading,
 precedence, bounded grammar and exit status. `check` calls the shared lexical
 validator without probing or mutating the output filesystem. It is not a server
-probe. Future `run` stays unsupported until the actual foreground event loop
-lands (roadmap 6); there is no daemon or placeholder runtime.
+probe. `run` is a genuine local-only reader, not a connected client; nonempty
+complete input fails with exit 1 because sending is unsupported.
 Initialization holds a root writer lock only for its own descriptor lifecycle;
 it does not authenticate, contact a server, open an input reader, or send a chat
 message. Do not infer operational behavior
@@ -63,8 +64,8 @@ $HOME/gin/                  directory, 0700
         └── out             ordinary regular file, 0600
 ```
 
-`out` is preserved on repeated initialization. No process currently consumes
-`in`: **a shell redirection to it can block indefinitely waiting for a reader**.
+`out` is preserved on repeated initialization and run. Only `gin run` consumes
+`in`: **without it, shell redirection can block waiting for a reader**.
 `tail -f out` has no incoming network events to show. The following is the
 future interface from the proposal, not a runnable messaging demo today:[17]
 
@@ -138,8 +139,8 @@ children without releasing ownership; `gin_root_release()` ends ownership.
 `gin_init()` wraps these calls after full lexical validation. The lock precedes
 all network/window/FIFO/log mutations. See [LOCKING.md](LOCKING.md) for exact
 inode checks, failure behavior, trusted-parent/local-filesystem scope and the
-POSIX per-process duplicate-close caveat. This is initializer/API groundwork,
-not a shipped runtime.
+POSIX per-process duplicate-close caveat. The local-only runtime retains this
+ownership through input and wake descriptor cleanup.
 
 ## Intended runtime: small core, isolated network adapter
 
@@ -208,8 +209,8 @@ before runtime implementation; the initializer currently removes nothing.
 
 ### FIFO runtime, log and delivery rules still to implement
 
-- The [bounded input API](INPUT.md) now handles local LF records. Runtime
-  scheduling, descriptor reopen/HUP and fairness remain roadmap 6. Bound future
+- The [bounded input API](INPUT.md) handles local LF records; the
+  [runtime](RUNTIME.md) implements fairness, EOF backoff and signals. Bound future
   queues, HTTP bodies and JSON depth separately; no transport exists yet.
 - Define an explicit small command grammar separately. Reject unsupported
   commands; never pass text to a shell or raw IRC path by default. Define the

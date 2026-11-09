@@ -19,6 +19,13 @@ gin \- initialize local files or validate Grappa frontend settings
 .RB [ \-n " NETWORK"]
 .RB [ \-c " TARGET"]
 .RB [ \-T " CHANTYPES"]
+.br
+.B gin run
+.RB [ \-f " FILE"]
+.RB [ \-d " ROOT"]
+.RB [ \-n " NETWORK"]
+.RB [ \-c " TARGET"]
+.RB [ \-T " CHANTYPES"]
 .SH DESCRIPTION
 .B gin
 is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
@@ -42,8 +49,20 @@ Validate file syntax and effective settings only, without inspecting or
 mutating the output filesystem or contacting a server. This is not a filesystem
 or server probe: nonexistent or symlinked output roots can pass check but fail
 init. Successful check prints nothing.
+.TP
+.B run
+Initialize/reuse one window and read its local FIFO in the foreground while
+holding the root writer lock. Before resource acquisition, announce startup
+intent and transport unavailable on stderr, not readiness. Diagnostics may block
+only before acquisition or after cleanup, with original signal dispositions;
+no runtime callback writes output. A successful nonblocking FIFO writer open
+establishes a local reader, not delivery.
+Ignore empty LF records; fail with exit 1 on the first nonempty complete or
+invalid record. No input is echoed to out or claimed accepted or delivered.
+SIGINT/SIGTERM stop cleanly with exit 0 unless cleanup fails.
+No fork, daemon, installed service or network connection is created.
 .PP
-For either command, each CLI flag may appear at most once. CLI settings override
+For each command, each CLI flag may appear at most once. CLI settings override
 file settings regardless of option order. Unknown options/operands are errors.
 .SH OPTIONS
 .TP
@@ -150,6 +169,7 @@ Persistent regular file, exactly 0600, effective-user-owned and single-link.
 init acquires a non-waiting POSIX fcntl F_SETLK exclusive whole-file advisory
 lock before any network/window/FIFO/log mutation and releases it after closing
 child descriptors. A conflict returns exit 1. check never probes/acquires it.
+run retains this lock until all input and wake descriptors have closed.
 The file's bytes are opaque and untouched, not a trusted PID record.
 Never unlink, rename, truncate or replace it to recover: the kernel releases
 ownership on close or process death, including SIGKILL. Valid partial layouts
@@ -159,8 +179,12 @@ are completed without deleting logs or replacing existing valid FIFO/log inodes.
 Directories created with mode 0700, regardless of the caller's umask.
 .TP
 .I ROOT/NETWORK/WINDOW/in
-A FIFO with mode 0600. No reader is started: writing without a reader may
-block. Do not write commands to it expecting delivery in this version.
+A FIFO with mode 0600. Only run starts a reader; writing without one may block.
+Query its PIPE_BUF and write each complete LF record in one atomic write within
+that bound and the separate 4096-byte payload bound. Controls C0/DEL other than
+LF reject a whole record; high bytes remain opaque. No commands or sending exist.
+Observed EOF rejects partial records. The reader retains its secure descriptor
+and uses a monotonic 100ms backoff to avoid HUP spin and support later writers.
 .TP
 .I ROOT/NETWORK/WINDOW/out
 A regular file with mode 0600, opened with O_APPEND, never O_TRUNC.
@@ -203,10 +227,12 @@ chat/azzurra/@grappa/{in,out}.
 .SH EXIT STATUS
 .TP
 .B 0
-Help, version, local initialization or settings check succeeded. Not connectivity.
+Help, version, local initialization, settings check or orderly runtime shutdown
+succeeded. Not connectivity or delivery.
 .TP
 .B 1
-Configuration I/O/unsafe file, or operational filesystem failure.
+Configuration I/O/unsafe file, operational filesystem/runtime failure,
+invalid input record or unsupported sending.
 .TP
 .B 2
 Malformed CLI/configuration, invalid effective settings, missing/duplicate
@@ -214,16 +240,14 @@ options, or unknown command. Validation completes before output-tree mutation.
 CLI syntax is checked before the explicit file, then effective settings; an
 unreadable explicit file returns 1 even if effective settings would be missing.
 .SH LIMITATIONS
-Networking, authentication, the FIFO event loop, Phoenix wire encoding/decoding
+Networking, authentication, sending, Phoenix wire encoding/decoding
 and end-to-end encryption are not implemented. No connect or message-sending
 command exists.
 .PP
-The intended future invocation is gin run [\-f FILE] [\-d ROOT] [\-n NETWORK]
-[\-c TARGET] [\-T CHANTYPES], with the same explicit settings/precedence contract. It will run
-in the foreground without implicit forking, daemonization or a background flag;
-external supervisors may manage it. Today run is unsupported and returns 2.
-Roadmap item 6 must implement the real event loop and signal shutdown first;
-connected operation also needs later transport/authentication milestones.
+run uses POSIX poll and an async-signal-safe self-pipe for SIGINT/SIGTERM.
+The runtime closes input/wake descriptors before releasing the root lock and
+restores previous signal dispositions and mask. Connected operation still
+needs later transport/authentication milestones.
 No Grappa protocol compatibility or delivery is claimed.
 .SH SEE ALSO
 .BR mkfifo (1),

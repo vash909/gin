@@ -27,4 +27,6 @@ test ! -e "$stage/usr/share/man/man1/gin.1"
 valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all \
     .build/gin init -d "$(pwd)/.build/valgrind-root" -n azzurra -c '#grappa'
 git diff --check
+GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_runtime.py
 printf '%s\n' 'All local development checks passed.'

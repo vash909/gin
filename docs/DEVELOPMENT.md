@@ -40,7 +40,8 @@ sh scripts/check.sh
 
 The full local gate runs documentation checks, ShellCheck, cppcheck, GCC,
 Clang, musl, BSD make, ASan/UBSan, staged install/uninstall and a Valgrind
-filesystem smoke test. It is sequential and bounded by the caller; it uses
+filesystem smoke test plus real foreground-runtime Valgrind tests. It is
+sequential and bounded by the caller; it uses
 `.build/`, does not contact Grappa and does not send any messages.
 
 Individual portable checks:
@@ -101,9 +102,10 @@ EOF and invisible writer handoff, cooperating atomic writers, safe access and
 root-lock retention. See [INPUT.md](INPUT.md) for the byte policy and limitations.
 Assertions remain enabled under `-DNDEBUG`. New foreign-owner cases run in the
 existing isolated privileged CI lane; non-root local runs skip them.
-No test needs credentials or a live server. Future foreground `run` remains
-unsupported until roadmap item 6 implements real descriptor/event-loop and
-signal handling; this milestone does not introduce a placeholder runtime.
+No test needs credentials or a live server. Foreground `run` now implements
+local-only input, not sending. `tests/test_runtime.py` and its test-only C
+consumer run in every make check path. See [RUNTIME.md](RUNTIME.md) for the
+callback API, CPU/resource tests, EOF policy and signal ownership contract.
 
 ## GitHub workflow
 

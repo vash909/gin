@@ -1,6 +1,8 @@
 #include "gin_fs.h"
 #include "gin_config.h"
+#include "gin_runtime.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,7 +13,8 @@ usage(void)
     puts("Usage: gin --help | --version\n"
          "       gin init -d ROOT -n NETWORK -c TARGET\n"
          "       gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
-         "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n\n"
+         "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
+         "       gin run   [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n\n"
          "Independent headless file/FIFO frontend for Grappa REST + Phoenix.\n"
          "init initializes local files; check validates settings, read-only.\n"
          "Neither command connects or speaks IRC; check is not a filesystem probe.\n\n"
@@ -44,8 +47,22 @@ usage(void)
          "See gin(1) for naming rules and the local security boundary.\n\n"
          "Exit: 0 success (not connectivity), 1 I/O/unsafe file/filesystem failure,\n"
          "2 malformed CLI/configuration/effective settings.\n"
-         "Networking, FIFO event loop, Phoenix wire codec and end-to-end\n"
-         "encryption are not implemented. run remains unsupported (roadmap 6).");
+         "run holds one root lock and reads one local FIFO in the foreground.\n"
+         "SIGINT/SIGTERM stop cleanly. Empty lines are ignored; invalid records\n"
+         "or nonempty complete lines fail with exit 1, without echo or delivery.\n"
+         "Networking, sending, Phoenix and encryption are not implemented.");
+}
+
+static int
+local_input(enum gin_runtime_event event, const struct gin_record *record, void *context)
+{
+    enum gin_runtime_event *decision = context;
+    (void)record;
+    if (event == GIN_RUNTIME_READY || event == GIN_RUNTIME_EMPTY)
+        return 0;
+    *decision = event;
+    errno = event == GIN_RUNTIME_LINE ? ENOTSUP : EINVAL;
+    return -1;
 }
 
 int
@@ -60,7 +77,7 @@ main(int argc, char **argv)
         return 0;
     }
     if (argc > 1 && (strcmp(argv[1], "init") == 0 ||
-                     strcmp(argv[1], "check") == 0)) {
+                     strcmp(argv[1], "check") == 0 || strcmp(argv[1], "run") == 0)) {
         const char *root = NULL, *network = NULL, *target = NULL;
         const char *file = NULL, *chantypes = NULL;
         struct gin_settings settings = { {0}, {0}, {0}, {0}, 0 };
@@ -120,6 +137,21 @@ main(int argc, char **argv)
             goto invalid;
         if (strcmp(argv[1], "check") == 0)
             return 0;
+        if (strcmp(argv[1], "run") == 0) {
+            enum gin_runtime_event decision = GIN_RUNTIME_READY;
+            /* Stdio may block: announce intent before owning runtime resources,
+             * and report failures only after runtime cleanup. Never claim ready. */
+            if (fputs("gin: starting local input; transport unavailable; sending unsupported\n", stderr) == EOF ||
+                fflush(stderr) == EOF)
+                return 1;
+            if (gin_runtime_run(root, network, target, chantypes, local_input, &decision) == -1) {
+                fputs(decision == GIN_RUNTIME_LINE ? "gin: sending unsupported; input not delivered\n" :
+                      decision == GIN_RUNTIME_REJECTED ? "gin: invalid input record\n" :
+                      "gin: local runtime failed\n", stderr);
+                return 1;
+            }
+            return 0;
+        }
         if (gin_init(root, network, target, chantypes) == -1) {
             perror("gin: init");
             return 1;
