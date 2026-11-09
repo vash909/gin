@@ -18,6 +18,18 @@ connect, create directories, change permissions, open FIFOs or write logs.
 A syntactically valid nonexistent or symlinked root can pass `check` but fail
 `init`. Neither command consumes FIFO input or sends messages.
 
+`init` takes a non-waiting POSIX advisory exclusive lock on the persistent,
+private regular file `ROOT/.gin.lock` before any network/window/FIFO/log
+mutation. A competing writer on the same root returns exit 1, even for another
+network/target. The lock is held until child descriptors are closed, then
+released on exit; it is not a continuing runtime. The kernel also releases
+ownership on process death. Never unlink/rename/truncate the file to recover:
+its bytes are opaque, not a trusted PID record. Safe existing partial layouts,
+logs and FIFOs are preserved, not cleaned up. `check` never acquires or probes
+this lock. See [LOCKING.md](LOCKING.md) for the held-root API, cooperative
+per-process semantics (including duplicate-close hazards), local-filesystem
+scope, NFS/distributed exclusions and trusted-parent assumptions.
+
 Every CLI flag takes one argument and may appear at most once, including `-f`.
 Unknown flags, operands and commands are errors. CLI settings override file
 settings regardless of flag order. Root, network and target are required;

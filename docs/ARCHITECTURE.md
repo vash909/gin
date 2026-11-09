@@ -24,7 +24,7 @@ Those numbers describe upstream, not implemented gin support. See
 | Area | Implemented scaffold | Intended later |
 | --- | --- | --- |
 | CLI | `--help`, `--version`, `init` and read-only `check`, explicit `-f` configuration | Foreground `run` (roadmap 6), then connected operation |
-| Filesystem | Private root/network/window directories; `in` FIFO and `out` regular file | Runtime descriptor ownership, locking and lifecycle reconciliation |
+| Filesystem | Private directories, FIFO/log and persistent root writer lock; held-root API | Runtime descriptor ownership and lifecycle reconciliation |
 | Input | Creates FIFO only | Bounded line reader and explicit command grammar |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
 | Transport | None | Grappa REST plus Phoenix Channels over verified TLS |
@@ -38,8 +38,9 @@ precedence, bounded grammar and exit status. `check` calls the shared lexical
 validator without probing or mutating the output filesystem. It is not a server
 probe. Future `run` stays unsupported until the actual foreground event loop
 lands (roadmap 6); there is no daemon or placeholder runtime.
-Initialization does not authenticate, contact a server, claim a root lock,
-open an input reader, or send a chat message. Do not infer operational behavior
+Initialization holds a root writer lock only for its own descriptor lifecycle;
+it does not authenticate, contact a server, open an input reader, or send a chat
+message. Do not infer operational behavior
 from the presence of directories or the word `in`.
 
 ## Implemented local projection
@@ -52,6 +53,7 @@ This creates or safely reuses:
 
 ```text
 $HOME/gin/                  directory, 0700
+├── .gin.lock               persistent regular file, 0600; POSIX advisory lock
 └── azzurra/                directory, 0700
     └── grappa/             directory, 0700; target is #grappa
         ├── in              named pipe (FIFO), 0600
@@ -121,8 +123,20 @@ remain errors: gin does not delete suspicious objects to make startup succeed.
 These checks do **not** make an untrusted/shared-writable ancestor safe and do
 not defend against another hostile process running as the same user. Choose a
 trusted parent, do not run as root, and do not treat a successful initialization
-as a runtime lock. Initialization can leave safe partial directories after a
-failure; whole-tree transactions and crash recovery are not implemented.
+as a continuing runtime lock. Initialization can leave safe partial directories
+after a failure; a later initializer completes valid layouts without replacing
+the persistent lock inode or deleting logs. The kernel releases ownership on
+close/process death, not on a stale timeout or PID-file check. There are no
+whole-tree transactions or power-loss durability guarantees.
+
+`gin_root_acquire()` retains root and POSIX `F_SETLK` lock descriptors;
+`gin_root_init()` initializes windows through that held root and closes its
+children without releasing ownership; `gin_root_release()` ends ownership.
+`gin_init()` wraps these calls after full lexical validation. The lock precedes
+all network/window/FIFO/log mutations. See [LOCKING.md](LOCKING.md) for exact
+inode checks, failure behavior, trusted-parent/local-filesystem scope and the
+POSIX per-process duplicate-close caveat. This is initializer/API groundwork,
+not a shipped runtime.
 
 ## Intended runtime: small core, isolated network adapter
 

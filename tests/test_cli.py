@@ -446,7 +446,8 @@ class GinTests(unittest.TestCase):
                              "-n", network, "-c", target)
                 self.assertEqual(log.stat().st_ino, inode)
                 self.assertEqual(log.read_bytes(), target.encode())
-        self.assertEqual(len(list(self.root.iterdir())), 3)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()),
+                         sorted(["net", "%4Eet", "%4E%45%54", ".gin.lock"]))
 
     def test_chantypes_config_empty_precedence_and_duplicates(self):
         config = self.config(b"root=root\nnetwork=net\ntarget=&Foo\nchantypes=#&+!\n")

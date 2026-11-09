@@ -157,25 +157,129 @@ fail:
     return -1;
 }
 
-int
-gin_init(const char *root, const char *network, const char *target,
-         const char *chantypes)
+/* Never replace, truncate or remove this inode: its persistence is intentional. */
+static int
+root_lock(int rootfd)
 {
-    int rootfd = -1, netfd = -1, winfd = -1, outfd = -1;
+    struct stat before, after, path;
+    struct flock lock;
+    int fd, saved;
+    const int flags = O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+
+    fd = openat(rootfd, ".gin.lock", flags | O_CREAT | O_EXCL, 0600);
+    if (fd == -1) {
+        if (errno != EEXIST ||
+            fstatat(rootfd, ".gin.lock", &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+            check_endpoint(&before, 0) == -1)
+            return -1;
+        fd = openat(rootfd, ".gin.lock", flags);
+        if (fd == -1)
+            return -1;
+        if (fstat(fd, &after) == -1 || check_endpoint(&after, 0) == -1)
+            goto fail;
+        if (before.st_dev != after.st_dev || before.st_ino != after.st_ino) {
+            errno = EPERM;
+            goto fail;
+        }
+    }
+    if (fstat(fd, &after) == -1 || check_endpoint(&after, 0) == -1 ||
+        fstatat(rootfd, ".gin.lock", &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&path, 0) == -1)
+        goto fail;
+    if (path.st_dev != after.st_dev || path.st_ino != after.st_ino) {
+        errno = EPERM;
+        goto fail;
+    }
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    if (fcntl(fd, F_SETLK, &lock) == -1)
+        goto fail;
+    /* Reject replacement or metadata changes across acquisition as well. */
+    if (fstat(fd, &after) == -1 || check_endpoint(&after, 0) == -1 ||
+        fstatat(rootfd, ".gin.lock", &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&path, 0) == -1)
+        goto fail;
+    if (path.st_dev != after.st_dev || path.st_ino != after.st_ino) {
+        errno = EPERM;
+        goto fail;
+    }
+    return fd;
+fail:
+    saved = errno;
+    (void)close(fd);
+    errno = saved;
+    return -1;
+}
+
+int
+gin_root_release(struct gin_root *root)
+{
+    int result = 0, saved = 0;
+
+    if (root->lockfd != -1 && close(root->lockfd) == -1) {
+        result = -1;
+        saved = errno;
+    }
+    if (root->rootfd != -1 && close(root->rootfd) == -1 && result == 0) {
+        result = -1;
+        saved = errno;
+    }
+    root->rootfd = root->lockfd = -1;
+    if (result == -1)
+        errno = saved;
+    return result;
+}
+
+int
+gin_root_acquire(const char *path, struct gin_root *root)
+{
+    struct gin_root opened = GIN_ROOT_INITIALIZER;
+    mode_t oldmask;
+    int saved, result = -1;
+
+    if (root->rootfd != -1 || root->lockfd != -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Reuse the lexical root policy without probing or mutating children. */
+    if (gin_validate(path, "net", "#window", "#") == -1)
+        return -1;
+    oldmask = umask(077);
+    opened.rootfd = root_dir(path);
+    if (opened.rootfd != -1 && check_dir(opened.rootfd) == 0) {
+        opened.lockfd = root_lock(opened.rootfd);
+        if (opened.lockfd != -1) {
+            *root = opened;
+            result = 0;
+        }
+    }
+    saved = errno;
+    if (result == -1)
+        (void)gin_root_release(&opened);
+    (void)umask(oldmask);
+    errno = saved;
+    return result;
+}
+
+int
+gin_root_init(const struct gin_root *root, const char *network,
+              const char *target, const char *chantypes)
+{
+    int netfd = -1, winfd = -1, outfd = -1;
     int result = -1, saved;
     mode_t oldmask;
     struct stat input;
     struct gin_name name;
 
-    if (gin_validate(root, network, target, chantypes) == -1 ||
-        gin_name_prepare(network, target, chantypes, &name) == -1)
+    if (root->rootfd == -1 || root->lockfd == -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_name_prepare(network, target, chantypes, &name) == -1)
         return -1;
     oldmask = umask(077);
-
-    rootfd = root_dir(root);
-    if (rootfd == -1 || check_dir(rootfd) == -1)
-        goto done;
-    netfd = private_dir(rootfd, name.network_component);
+    netfd = private_dir(root->rootfd, name.network_component);
     if (netfd == -1)
         goto done;
     winfd = private_dir(netfd, name.window_component);
@@ -201,9 +305,27 @@ done:
         (void)close(winfd);
     if (netfd != -1)
         (void)close(netfd);
-    if (rootfd != -1)
-        (void)close(rootfd);
     (void)umask(oldmask);
+    errno = saved;
+    return result;
+}
+
+int
+gin_init(const char *path, const char *network, const char *target,
+         const char *chantypes)
+{
+    struct gin_root root = GIN_ROOT_INITIALIZER;
+    int result, saved;
+
+    /* Invalid effective settings must not even create the root or lock. */
+    if (gin_validate(path, network, target, chantypes) == -1 ||
+        gin_root_acquire(path, &root) == -1)
+        return -1;
+    result = gin_root_init(&root, network, target, chantypes);
+    saved = errno;
+    /* All projection descriptors were closed before releasing the writer. */
+    if (gin_root_release(&root) == -1 && result == 0)
+        return -1;
     errno = saved;
     return result;
 }
