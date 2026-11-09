@@ -159,6 +159,10 @@ class RuntimeTests(unittest.TestCase):
         except BlockingIOError:
             pass
         fcntl.fcntl(write_fd, fcntl.F_SETFL, flags)
+        # Filling the fixture can add native status bits (Darwin FWASWRITTEN).
+        # Snapshot after our own writes, before the child, and compare all bits.
+        flags = fcntl.fcntl(write_fd, fcntl.F_GETFL)
+        self.assertFalse(flags & os.O_NONBLOCK)
         child = subprocess.Popen([str(REPO / '.build/runtime_stderr'), 'run', *self.args], stdout=subprocess.PIPE, stderr=write_fd)
         def cleanup():
             if child.poll() is None:
