@@ -15,7 +15,9 @@ BIN = REPO / ".build/gin"
 
 class LockingTests(unittest.TestCase):
     def setUp(self):
-        scratch = Path(os.environ.get("TMPDIR", str(REPO / ".build/test-scratch")))
+        # Canonicalize only our fixture path: macOS TMPDIR can traverse /var,
+        # a symlink that gin deliberately refuses in application root paths.
+        scratch = Path(os.environ.get("TMPDIR", str(REPO / ".build/test-scratch"))).resolve()
         scratch.mkdir(parents=True, exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(prefix="gin-lock-", dir=scratch)
         self.addCleanup(self.temp.cleanup)
