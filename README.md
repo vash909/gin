@@ -92,7 +92,8 @@ but implements local input only, not a connected messaging client.
   errors. No TUI, database, plugin framework or custom cryptographic protocol.
 - Isolated synchronous REST/TLS and account [authentication APIs](docs/AUTH.md),
   with private credential storage; libcurl and Jansson are linked. They are not
-  wired into CLI/runtime callbacks. Protocol discovery/negotiation and
+  wired into CLI/runtime callbacks. Isolated [HTTP protocol discovery and gated
+  authentication](docs/DISCOVERY.md) are implemented; WebSocket negotiation and
   libwebsockets integration remain future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.

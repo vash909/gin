@@ -4,7 +4,8 @@
 
 `include/gin_http.h` and `src/http.c` provide a synchronous, length-aware
 GET/POST/DELETE transport. The separate [account authentication API](AUTH.md) adds bounded JSON
-login/identity/logout; this transport itself does not parse JSON, negotiate
+login/identity/logout; [HTTP discovery](DISCOVERY.md) adds protocol preflight
+and gated authentication. This transport itself does not parse JSON, negotiate
 protocols, implement WebSockets or deliver messages. Response bodies
 are opaque bytes, including NUL. The installed CLI has **no network command**;
 `gin run` remains local-only and fails closed on sending. This adapter must not

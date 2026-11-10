@@ -35,7 +35,9 @@ The isolated [REST/TLS API](HTTP.md) is implemented in `src/http.c` /
 `include/gin_http.h`; it is synchronous and must not run inside poll callbacks.
 The separate [account authentication API](AUTH.md) adds bounded JSON login,
 identity and logout with explicit [private storage](CREDENTIALS.md), but no
-protocol discovery, runtime connection or Grappa compatibility claim.
+runtime connection or Grappa compatibility claim. The separate
+[HTTP discovery and gated-auth APIs](DISCOVERY.md) enforce independent caller
+and server floors before authentication; WebSocket negotiation remains planned.
 
 The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
@@ -172,7 +174,7 @@ Adapter dependencies:
 | Dependency | Status and responsibility |
 | --- | --- |
 | libcurl >=7.85.0 | Linked; REST requests, verified TLS and bounded responses/deadlines |
-| Jansson >=2.14 | Linked; JSON encoding/decoding at the authentication boundary |
+| Jansson >=2.14 | Linked; JSON encoding/decoding at authentication and discovery boundaries |
 | libwebsockets | Planned and unlinked; WebSocket/TLS upgrade, frame handling and service integration |
 
 libcurl and Jansson are build requirements. libwebsockets remains a future dependency choice, not a tested integration.
