@@ -8,9 +8,10 @@ int gin_network_encode(const char *slug, char *out, size_t capacity);
 int gin_network_decode(const char *component, char *out, size_t capacity);
 enum gin_window_kind { GIN_WINDOW_CHANNEL, GIN_WINDOW_NONCHANNEL };
 
-/* Owned copies: never modify the caller's slug or wire target. No numeric ID
- * is available until future server discovery. Nonchannel includes synthetic
- * windows; it is not proof of a DM. Treat a prepared name as immutable. */
+/* Owned copies: never modify the caller's slug or wire target. This name-only
+ * value has no numeric network ID; discovery maps that identity separately.
+ * Nonchannel includes synthetic windows; it is not proof of a DM.
+ * Treat a prepared name as immutable. */
 struct gin_name {
     char input_network_slug[256];
     char original_wire_target[257];

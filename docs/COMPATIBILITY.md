@@ -10,8 +10,9 @@ Gin is a development scaffold, not a released or operational Grappa client.
 - Qualified runtime Grappa revisions: **none**.
 - Isolated REST/TLS and account authentication APIs: local HTTP/HTTPS fixtures
   only, including bounded JSON, private credentials and [HTTP discovery with
-  gated authentication](DISCOVERY.md); no WebSocket negotiation or live Grappa
-  qualification. See [authentication scope](AUTH.md).
+  gated authentication](DISCOVERY.md) and [owned topology snapshots](TOPOLOGY.md);
+  REST query inventory remains unknown without a user-topic snapshot, and no
+  WebSocket acquisition or live Grappa qualification is claimed. See [authentication scope](AUTH.md).
 - Published beta/stable releases: **none**.
 
 The proposed server feature floor in [PROTOCOL.md](PROTOCOL.md) is a design
