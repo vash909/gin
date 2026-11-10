@@ -34,9 +34,9 @@ jobs:
         run: |
           if [ "${{ runner.os }}" = Linux ]; then
             sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev openssl
+            sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libjansson-dev pkg-config openssl
           else
-            brew install curl openssl@3
+            brew install curl jansson pkgconf openssl@3
             echo "CURL_CONFIG=$(brew --prefix curl)/bin/curl-config" >> "$GITHUB_ENV"
             echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
           fi
@@ -60,14 +60,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install developer tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake cmake curl xz-utils bzip2 libcurl4-openssl-dev openssl
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake cmake curl xz-utils bzip2 libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Build pinned musl TLS dependencies
         env:
           GIN_MUSL_PREFIX: ${{ runner.temp }}/gin-musl
           TMPDIR: ${{ runner.temp }}
         run: sh scripts/build-musl-http.sh
       - name: musl libc and actual musl TLS libcurl
-        run: make CC=musl-gcc CURL_CONFIG="$RUNNER_TEMP/gin-musl/bin/curl-config" LDFLAGS=-static check
+        run: make CC=musl-gcc CURL_CONFIG="$RUNNER_TEMP/gin-musl/bin/curl-config" JANSSON_CFLAGS="-I$RUNNER_TEMP/gin-musl/include" JANSSON_LIBS="-L$RUNNER_TEMP/gin-musl/lib -ljansson" LDFLAGS=-static check
       - name: BSD make
         run: make clean && bmake CC=cc check
 
@@ -81,7 +81,7 @@ jobs:
         with:
           release: '14.3'
           usesh: true
-          prepare: pkg install -y python3 curl openssl
+          prepare: pkg install -y python3 curl jansson pkgconf openssl
           run: |
             make CC=cc check
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install analysis tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev openssl
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Documentation and script checks
         run: |
           python3 scripts/check_docs.py
@@ -106,7 +106,8 @@ jobs:
         run: |
           # Keep the version guard active when system headers are not discovered.
           curl_vernum=$(curl-config --vernum)
-          cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
+          jansson_verhex=$(pkg-config --modversion jansson | python3 -c 'import sys; p=[int(x) for x in sys.stdin.read().strip().split(".")]; print(hex((p[0]<<16)|(p[1]<<8)|(p[2] if len(p)>2 else 0)))')
+          cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" "-DJANSSON_VERSION_HEX=$jansson_verhex" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
         run: make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
       - name: Valgrind
@@ -117,8 +118,10 @@ jobs:
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_locking.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_input.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_runtime.py
+          sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_credentials.py
           GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_runtime.py
           GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
+          GIN_AUTH_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_auth.py AuthTests.test_stateful_revocation_and_explicit_persistence
           valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
 
   gate:

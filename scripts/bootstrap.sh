@@ -33,6 +33,10 @@ for library in libwebsockets jansson openssl; do
         missing=1
     fi
 done
+if ! pkg-config --atleast-version=2.14 jansson; then
+    echo 'Authentication requires Jansson >=2.14.' >&2
+    missing=1
+fi
 curl_config=${CURL_CONFIG:-curl-config}
 if command -v "$curl_config" >/dev/null 2>&1; then
     printf 'curl-config: %s\n' "$("$curl_config" --version)"

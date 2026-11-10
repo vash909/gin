@@ -27,13 +27,15 @@ Those numbers describe upstream, not implemented gin support. See
 | Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
 | Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
-| Transport | Isolated bounded libcurl GET/TLS API, not connected to runtime | Grappa REST plus Phoenix Channels integration |
+| Transport | Isolated bounded libcurl GET/POST/DELETE TLS and account authentication APIs, not connected to runtime | Grappa REST plus Phoenix Channels integration |
 | Runtime | One foreground local-only process using POSIX `poll()` and signal self-pipe | Network adapter integration |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
 The isolated [REST/TLS API](HTTP.md) is implemented in `src/http.c` /
 `include/gin_http.h`; it is synchronous and must not run inside poll callbacks.
-It does not add authentication, JSON parsing or Grappa compatibility.
+The separate [account authentication API](AUTH.md) adds bounded JSON login,
+identity and logout with explicit [private storage](CREDENTIALS.md), but no
+protocol discovery, runtime connection or Grappa compatibility claim.
 
 The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
@@ -165,15 +167,15 @@ operation and `poll()`, not a daemon/TUI framework. No threads, Linux-only
 the core design. Signal handlers should only request orderly shutdown; normal
 control flow releases descriptors and private state.
 
-Proposed adapter dependencies, **not needed or linked to build the scaffold**:
+Adapter dependencies:
 
-| Dependency | Planned responsibility |
+| Dependency | Status and responsibility |
 | --- | --- |
-| libcurl | REST requests, verified TLS, bounded responses/deadlines; multi interface for event-loop integration |
-| libwebsockets | WebSocket/TLS upgrade, frame handling and service integration |
-| Jansson | JSON encoding/decoding at the adapter boundary |
+| libcurl >=7.85.0 | Linked; REST requests, verified TLS and bounded responses/deadlines |
+| Jansson >=2.14 | Linked; JSON encoding/decoding at the authentication boundary |
+| libwebsockets | Planned and unlinked; WebSocket/TLS upgrade, frame handling and service integration |
 
-These are dependency choices for future implementation, not a tested integration.
+libcurl and Jansson are build requirements. libwebsockets remains a future dependency choice, not a tested integration.
 The core should consume typed resource/events and return explicit effects;
 keep library handles and callbacks inside the adapter. Integrating two network
 libraries with one `poll()` loop needs a tested descriptor/timer ownership

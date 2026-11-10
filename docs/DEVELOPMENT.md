@@ -4,7 +4,7 @@
 
 The executable needs a C99 compiler, POSIX.1-2008 headers/libc and POSIX make.
 The isolated REST/TLS adapter now requires libcurl >=7.85.0 with TLS and
-asynchronous DNS. Tests use Python 3 and OpenSSL, never at runtime. See
+asynchronous DNS. Account authentication requires Jansson >=2.14. Tests use Python 3 and OpenSSL, never at runtime. See
 [HTTP.md](HTTP.md) for API limits, curl-config/pkg-config overrides and the
 pinned user-prefix musl TLS recipe.
 No SDK, Grappa checkout, BEAM, Node, containers or cloud credentials are needed.
@@ -25,8 +25,8 @@ This installs system packages through apt and sudo; it does not modify shell
 startup files, download arbitrary installers or start services. It includes GCC,
 Clang/static tools, make/BSD make, musl, GDB, Valgrind, cppcheck, ShellCheck,
 Python 3, pkg-config and the libcurl/libwebsockets/Jansson/OpenSSL development
-packages. libcurl is now required and linked; libwebsockets/Jansson still
-prepare for future adapters and are not linked.
+packages. libcurl and Jansson are required and linked; libwebsockets
+still prepares for a future adapter and is not linked.
 
 Set environment `CURL_CONFIG` to select the host `curl-config` checked by
 `scripts/bootstrap.sh` and used by the host builds in `scripts/check.sh`;
@@ -36,10 +36,10 @@ gate in `scripts/check.sh`. The pinned musl recipe in
 [HTTP.md](HTTP.md) is a Linux developer toolchain recipe, not a macOS/BSD
 requirement.
 
-On macOS use the Command Line Tools, Python 3, Homebrew curl and OpenSSL;
+On macOS use the Command Line Tools, Python 3, Homebrew curl, Jansson, pkgconf and OpenSSL;
 select it with `make CURL_CONFIG="$(brew --prefix curl)/bin/curl-config" check`.
 On FreeBSD use
-the base C compiler/make and packaged Python 3, curl and OpenSSL. The full Linux development gate uses
+the base C compiler/make and packaged Python 3, curl, Jansson, pkgconf and OpenSSL. The full Linux development gate uses
 Linux-specific developer packages, but the application itself does not.
 Install optional analysis tools through the host package manager.
 
@@ -65,7 +65,9 @@ make CC=clang check
 make clean
 bmake CC=cc check
 make clean
-make CC=musl-gcc CURL_CONFIG="$GIN_MUSL_PREFIX/bin/curl-config" LDFLAGS=-static check
+make CC=musl-gcc CURL_CONFIG="$GIN_MUSL_PREFIX/bin/curl-config" \
+  JANSSON_CFLAGS="-I$GIN_MUSL_PREFIX/include" \
+  JANSSON_LIBS="-L$GIN_MUSL_PREFIX/lib -ljansson" LDFLAGS=-static check
 ```
 
 Use strict warning flags supplied by the Makefile even when overriding CFLAGS.

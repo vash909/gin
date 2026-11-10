@@ -150,4 +150,5 @@ the first nonempty complete or rejected input record. No input is echoed to
 out or acknowledged as accepted/delivered. Signal shutdown returns 0 unless
 cleanup fails. See [RUNTIME.md](RUNTIME.md) for descriptor ownership, monotonic
 EOF backoff, signal restoration and API preconditions. Connected operation
-still requires later transport/authentication milestones; no credentials exist.
+still requires protocol discovery and asynchronous transport integration;
+[isolated authentication APIs](AUTH.md) do not expose CLI credentials.

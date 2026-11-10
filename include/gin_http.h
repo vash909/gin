@@ -38,6 +38,22 @@ void gin_http_global_cleanup(void);
  * have zero length and their written bytes are cleared. No NUL terminator. */
 struct gin_http_result gin_http_get(const struct gin_http_settings *settings,
     unsigned char *body, size_t capacity);
+#define GIN_HTTP_REQUEST_MAX ((size_t)16384)
+#define GIN_HTTP_BEARER_MAX ((size_t)4096)
+enum gin_http_method { GIN_HTTP_GET, GIN_HTTP_POST_JSON, GIN_HTTP_DELETE };
+/* Separate opt-in API: old GET settings never acquire authentication fields.
+ * All requests use HTTPS. Bearers bind to an exact authority-only origin. */
+struct gin_http_request {
+    const struct gin_http_settings *settings;
+    enum gin_http_method method;
+    const char *bearer;
+    const char *bearer_origin;
+    const unsigned char *json_body;
+    size_t json_length;
+};
+int gin_http_origin_valid(const char *origin);
+struct gin_http_result gin_http_request(const struct gin_http_request *request,
+    unsigned char *body, size_t capacity);
 /* Static diagnostics only; never includes peer or caller-controlled bytes. */
 const char *gin_http_error(enum gin_http_code code);
 
