@@ -8,12 +8,15 @@ CFLAGS = -O2
 LDFLAGS =
 LDLIBS =
 PYTHON = python3
+CURL_CONFIG = curl-config
+CURL_CFLAGS = `$(CURL_CONFIG) --cflags`
+CURL_LIBS = `$(CURL_CONFIG) --libs`
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c $(CURL_LIBS) $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -53,13 +56,23 @@ all: .build/gin
 .build/runtime_stderr: tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c $(LDLIBS)
 
-check: all .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+.build/http_driver: tests/http_driver.c src/http.c include/gin_http.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(LDFLAGS) -o $@ tests/http_driver.c src/http.c $(CURL_LIBS) $(LDLIBS)
+
+.build/test_http_bounds: tests/test_http_bounds.c src/http.c include/gin_http.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(LDFLAGS) -o $@ tests/test_http_bounds.c $(CURL_LIBS) $(LDLIBS)
+
+check: all .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+	.build/test_http_bounds
 	.build/test_naming
 	.build/test_input
 	$(PYTHON) tests/test_cli.py
 	$(PYTHON) tests/test_locking.py
 	$(PYTHON) tests/test_input.py
 	$(PYTHON) tests/test_runtime.py
+	$(PYTHON) tests/test_http.py
 
 clean:
 	rm -rf .build

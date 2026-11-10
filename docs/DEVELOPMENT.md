@@ -3,7 +3,10 @@
 ## Requirements
 
 The executable needs a C99 compiler, POSIX.1-2008 headers/libc and POSIX make.
-The current scaffold links only libc. Tests use Python 3, never at runtime.
+The isolated REST/TLS adapter now requires libcurl >=7.85.0 with TLS and
+asynchronous DNS. Tests use Python 3 and OpenSSL, never at runtime. See
+[HTTP.md](HTTP.md) for API limits, curl-config/pkg-config overrides and the
+pinned user-prefix musl TLS recipe.
 No SDK, Grappa checkout, BEAM, Node, containers or cloud credentials are needed.
 
 On Debian/Ubuntu, inspect tools without changing the system:
@@ -22,11 +25,21 @@ This installs system packages through apt and sudo; it does not modify shell
 startup files, download arbitrary installers or start services. It includes GCC,
 Clang/static tools, make/BSD make, musl, GDB, Valgrind, cppcheck, ShellCheck,
 Python 3, pkg-config and the libcurl/libwebsockets/Jansson/OpenSSL development
-packages. The latter libraries prepare for future adapters; they are not
-required or linked by today's core.
+packages. libcurl is now required and linked; libwebsockets/Jansson still
+prepare for future adapters and are not linked.
 
-On macOS use the Command Line Tools plus Python 3; on FreeBSD use the base C
-compiler/make and the packaged Python 3. The full Linux development gate uses
+Set environment `CURL_CONFIG` to select the host `curl-config` checked by
+`scripts/bootstrap.sh` and used by the host builds in `scripts/check.sh`;
+it defaults to `curl-config`. Ordinary `make` still takes an explicit
+command-line `CURL_CONFIG=`. Use `CURL_CONFIG_MUSL` only for the genuine-musl
+gate in `scripts/check.sh`. The pinned musl recipe in
+[HTTP.md](HTTP.md) is a Linux developer toolchain recipe, not a macOS/BSD
+requirement.
+
+On macOS use the Command Line Tools, Python 3, Homebrew curl and OpenSSL;
+select it with `make CURL_CONFIG="$(brew --prefix curl)/bin/curl-config" check`.
+On FreeBSD use
+the base C compiler/make and packaged Python 3, curl and OpenSSL. The full Linux development gate uses
 Linux-specific developer packages, but the application itself does not.
 Install optional analysis tools through the host package manager.
 
@@ -35,7 +48,7 @@ Install optional analysis tools through the host package manager.
 ```sh
 make
 make check
-sh scripts/check.sh
+CURL_CONFIG_MUSL="$GIN_MUSL_PREFIX/bin/curl-config" sh scripts/check.sh
 ```
 
 The full local gate runs documentation checks, ShellCheck, cppcheck, GCC,
@@ -52,7 +65,7 @@ make CC=clang check
 make clean
 bmake CC=cc check
 make clean
-make CC=musl-gcc check
+make CC=musl-gcc CURL_CONFIG="$GIN_MUSL_PREFIX/bin/curl-config" LDFLAGS=-static check
 ```
 
 Use strict warning flags supplied by the Makefile even when overriding CFLAGS.
