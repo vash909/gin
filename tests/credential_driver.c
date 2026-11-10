@@ -1,3 +1,7 @@
+/* RLIMIT_FSIZE fault injection uses the XSI SIGXFSZ signal. */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #include "gin_credential.h"
 #include <stdio.h>
 #include <signal.h>
