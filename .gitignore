@@ -9,3 +9,6 @@ core
 .env
 .env.*
 !.env.example
+# Runtime credential records and incomplete private-store writes.
+.gin.credentials
+.gin.credentials.tmp.*

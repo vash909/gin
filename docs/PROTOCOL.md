@@ -6,7 +6,9 @@ This is an implementation guide for **planned transport**, not a claim that
 gin can connect. The repository provides local CLI/filesystem
 initialization plus a bounded local input C API and local-only foreground
 runtime. An isolated [bounded HTTP/TLS GET API](HTTP.md) now exists, but no
-CLI connection, authentication, JSON parsing, WebSocket, message sender or E2EE. The local input
+CLI connection, discovery/negotiation, WebSocket, message sender or E2EE.
+Separate [account authentication APIs](AUTH.md) implement bounded JSON and
+private credentials outside runtime callbacks. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).
 See `ARCHITECTURE.md` for the implemented boundary.
 
@@ -31,7 +33,7 @@ labelled project-discussion reference in `ARCHITECTURE.md`. Module/function
 names identify the authoritative implementation; code wins over prose.
 The examples are small constructed wire illustrations, not captured sessions.
 
-## Discovery, authentication and compatibility (planned)
+## Discovery and compatibility policy; isolated authentication
 
 1. Fetch unauthenticated `GET /api/config` before sending credentials or opening
    a socket. Read `server`, diagnostic software `version`, `protocol_version`

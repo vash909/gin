@@ -2,9 +2,10 @@
 
 ## Actual scope
 
-`include/gin_http.h` and `src/http.c` provide a synchronous, length-aware GET
-transport. They do not implement a Grappa REST client, authentication, JSON
-parsing, protocol negotiation, WebSockets or message delivery. Response bodies
+`include/gin_http.h` and `src/http.c` provide a synchronous, length-aware
+GET/POST/DELETE transport. The separate [account authentication API](AUTH.md) adds bounded JSON
+login/identity/logout; this transport itself does not parse JSON, negotiate
+protocols, implement WebSockets or deliver messages. Response bodies
 are opaque bytes, including NUL. The installed CLI has **no network command**;
 `gin run` remains local-only and fails closed on sending. This adapter must not
 be called from runtime callbacks, which must remain bounded and nonblocking.
@@ -57,8 +58,12 @@ process or TLS backend.
 
 Raw controls, spaces, non-ASCII URL bytes, backslashes, fragments (even empty)
 and URL userinfo are rejected. Percent-encode HTTP path segments independently
-of filesystem names. URL length is at most 4096 bytes. No arbitrary header,
-authentication, method, Unix-socket or resolver override surface is exposed.
+of filesystem names. URL length is at most 4096 bytes. No arbitrary header, Unix-socket or resolver override surface is exposed.
+The separate explicit `gin_http_request` API supports GET, POST JSON and DELETE,
+with a 16384-byte request body cap and optional 4096-byte bearer. It requires
+HTTPS even on loopback and an exact authority-only `bearer_origin` match before
+network access. `gin_http_get` and its existing settings retain unauthed semantics;
+old callers never acquire uninitialized auth fields.
 
 Only explicit `allow_loopback_http = 1` permits plain HTTP, and only a raw
 canonical authority `127.0.0.1` or `[::1]`, optionally followed by a decimal
@@ -72,7 +77,7 @@ policy). Redirect following and unrestricted authentication are disabled;
 redirects return `STATUS` without contacting the destination, including HTTPS
 to HTTP downgrades. Future authentication must preserve this no-follow contract
 and add explicit origin-scoped credentials, never credentials in URLs or blind
-redirect retries. No current API accepts credentials. Proxy environment values
+redirect retries. Only the explicit request API accepts credentials. Proxy environment values
 are overridden with an empty proxy; netrc and HTTP/proxy authentication are
 disabled. Fresh handles do not enable a cookie engine. libcurl easy does not
 read the curl command-line tool's `.curlrc`. No Accept-Encoding is requested and
@@ -99,7 +104,8 @@ libcurl **>=7.85.0**, with TLS and asynchronous DNS, is now an explicit build
 and adapter runtime requirement. `CURLOPT_PROTOCOLS_STR` and
 `CURLOPT_REDIR_PROTOCOLS_STR` were added in 7.85.0; compile-time and runtime
 version checks reject older libraries. Linux host coverage includes 7.88.1.
-The executable still uses strict C99/POSIX make; no new JSON dependency exists.
+The executable still uses strict C99/POSIX make; authentication adds Jansson
+>=2.14. See [AUTH.md](AUTH.md) for portable flag overrides.
 `CURL_CONFIG` defaults to `curl-config`. Ordinary `make` still accepts an
 explicit `CURL_CONFIG=` on its command line. `scripts/bootstrap.sh` and the
 host builds in `scripts/check.sh` also honor an environment `CURL_CONFIG`
@@ -115,13 +121,16 @@ musl-gcc with host glibc libcurl headers/libraries and call that musl coverage.
 For a genuine user-prefix musl TLS toolchain, set absolute `GIN_MUSL_PREFIX`
 and a private `TMPDIR`, then run `sh scripts/build-musl-http.sh`. This is a
 Linux developer musl toolchain recipe, not a macOS/BSD requirement. The recipe pins
-curl 8.23.0 and mbedTLS 3.6.7 release archives and SHA-256 digests, builds both
-with musl-gcc (at most four compile jobs), and installs without sudo. It checks
+curl 8.23.0, mbedTLS 3.6.7 and Jansson 2.15.1 release archives and SHA-256
+digests, builds them with musl-gcc (at most two compile jobs), and installs
+without sudo. It checks
 upfront for curl, tar, xz, bzip2, sha256sum, cmake, make and musl-gcc. Then run:
 
 ```sh
 make clean
-make CC=musl-gcc CURL_CONFIG="$GIN_MUSL_PREFIX/bin/curl-config" LDFLAGS=-static check
+make CC=musl-gcc CURL_CONFIG="$GIN_MUSL_PREFIX/bin/curl-config" \
+  JANSSON_CFLAGS="-I$GIN_MUSL_PREFIX/include" \
+  JANSSON_LIBS="-L$GIN_MUSL_PREFIX/lib -ljansson" LDFLAGS=-static check
 CURL_CONFIG_MUSL="$GIN_MUSL_PREFIX/bin/curl-config" sh scripts/check.sh
 ```
 

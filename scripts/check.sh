@@ -8,7 +8,8 @@ python3 scripts/check_docs.py
 shellcheck scripts/*.sh
 # cppcheck does not inherit the compiler's system-header search paths.
 curl_vernum=$("$host_curl_config" --vernum)
-cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" \
+jansson_verhex=$(pkg-config --modversion jansson | python3 -c 'import sys; p=[int(x) for x in sys.stdin.read().strip().split(".")]; print(hex((p[0]<<16)|(p[1]<<8)|(p[2] if len(p)>2 else 0)))')
+cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" "-DJANSSON_VERSION_HEX=$jansson_verhex" \
     --std=c99 --enable=warning,performance,portability --error-exitcode=1 \
     --inline-suppr --suppress=missingIncludeSystem -I include src
 for compiler in gcc clang; do
@@ -17,7 +18,9 @@ for compiler in gcc clang; do
  done
 : "${CURL_CONFIG_MUSL:?Set CURL_CONFIG_MUSL to a genuine musl TLS libcurl curl-config}"
 make CURL_CONFIG="$host_curl_config" clean
-make CC=musl-gcc CURL_CONFIG="$CURL_CONFIG_MUSL" LDFLAGS=-static check
+musl_prefix=$(dirname "$(dirname "$CURL_CONFIG_MUSL")")
+make CC=musl-gcc CURL_CONFIG="$CURL_CONFIG_MUSL" \
+    JANSSON_CFLAGS="-I$musl_prefix/include" JANSSON_LIBS="-L$musl_prefix/lib -ljansson" LDFLAGS=-static check
 make CURL_CONFIG="$host_curl_config" clean
 bmake CC=cc CURL_CONFIG="$host_curl_config" check
 make CURL_CONFIG="$host_curl_config" clean
@@ -38,4 +41,6 @@ GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --err
     python3 tests/test_runtime.py
 GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
+GIN_AUTH_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_auth.py AuthTests.test_stateful_revocation_and_explicit_persistence
 printf '%s\n' 'All local development checks passed.'

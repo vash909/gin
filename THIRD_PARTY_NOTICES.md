@@ -18,10 +18,12 @@ against a running Grappa server.
 
 ## Linked transport dependencies
 
-The REST/TLS adapter links the separately licensed libcurl dependency; no
-libcurl implementation is vendored. See [curl's license](https://curl.se/docs/copyright.html)
-and the selected TLS backend's own notices. The optional pinned musl developer
-recipe downloads curl and mbedTLS sources outside the repository. Distributors
+The REST/TLS and account authentication adapters link the separately licensed
+libcurl and Jansson dependencies; neither implementation is vendored. See
+[curl's license](https://curl.se/docs/copyright.html), the selected TLS
+backend's own notices and [Jansson's MIT license](https://github.com/akheron/jansson/blob/v2.15.1/LICENSE). The
+optional pinned musl developer recipe downloads curl, mbedTLS and Jansson
+sources outside the repository. Distributors
 must retain the applicable dependency licenses/notices, including those of
 static libraries; a source-only gin archive is not a qualified binary release.
 
