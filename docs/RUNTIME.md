@@ -30,7 +30,9 @@ The [input byte policy and cooperating writer contract](INPUT.md) still apply:
 query the actual FIFO's PIPE_BUF and submit a complete LF record in one atomic
 write within both that bound and the separate local payload limit. No commands,
 shell evaluation, REST, TLS, authentication, Phoenix, history or sending exist.
-This does not establish Grappa protocol compatibility.
+This does not establish Grappa protocol compatibility. The separate
+[synchronous REST/TLS API](HTTP.md) is not called from this runtime or its
+callbacks; network integration remains future work.
 
 ## API, ownership and scheduling
 

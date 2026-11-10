@@ -40,6 +40,9 @@ implicit `~/.config` discovery and no configuration environment variables.
 Relative `FILE` and root paths use the invocation's current working directory,
 **not** the configuration file's directory. CLI values are not trimmed.
 
+The isolated [REST/TLS C API](HTTP.md) adds no CLI connection command, URL,
+credential or insecure option, and is not invoked by `run`.
+
 ## Explicit configuration file
 
 Create a regular file with mode exactly `0600`, owned by the effective user,

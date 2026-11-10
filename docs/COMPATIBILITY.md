@@ -8,6 +8,8 @@ Gin is a development scaffold, not a released or operational Grappa client.
 - Captured upstream protocol: 63; captured upstream server minimum: 1.
 - Implemented gin client declaration: **none**.
 - Qualified runtime Grappa revisions: **none**.
+- Isolated REST/TLS GET adapter: local HTTP/HTTPS fixtures only; no JSON,
+  authentication or live Grappa qualification. See [adapter scope](HTTP.md).
 - Published beta/stable releases: **none**.
 
 The proposed server feature floor in [PROTOCOL.md](PROTOCOL.md) is a design

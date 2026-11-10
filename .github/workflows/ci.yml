@@ -30,10 +30,20 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install REST/TLS development dependency
+        run: |
+          if [ "${{ runner.os }}" = Linux ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev openssl
+          else
+            brew install curl openssl@3
+            echo "CURL_CONFIG=$(brew --prefix curl)/bin/curl-config" >> "$GITHUB_ENV"
+            echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+          fi
       - name: Build and test strict C99/POSIX
         env:
           CC: ${{ matrix.cc }}
-        run: make CC="$CC" check
+        run: make CC="$CC" CURL_CONFIG="${CURL_CONFIG:-curl-config}" check
       - name: Verify staged installation behavior
         run: python3 tests/test_install.py make
       - name: Verify staged install and uninstall
@@ -46,13 +56,18 @@ jobs:
 
   compatibility:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install developer tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake
-      - name: musl libc
-        run: make CC=musl-gcc check
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake cmake curl xz-utils bzip2 libcurl4-openssl-dev openssl
+      - name: Build pinned musl TLS dependencies
+        env:
+          GIN_MUSL_PREFIX: ${{ runner.temp }}/gin-musl
+          TMPDIR: ${{ runner.temp }}
+        run: sh scripts/build-musl-http.sh
+      - name: musl libc and actual musl TLS libcurl
+        run: make CC=musl-gcc CURL_CONFIG="$RUNNER_TEMP/gin-musl/bin/curl-config" LDFLAGS=-static check
       - name: BSD make
         run: make clean && bmake CC=cc check
 
@@ -66,7 +81,7 @@ jobs:
         with:
           release: '14.3'
           usesh: true
-          prepare: pkg install -y python3
+          prepare: pkg install -y python3 curl openssl
           run: |
             make CC=cc check
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
@@ -81,14 +96,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install analysis tools
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev openssl
       - name: Documentation and script checks
         run: |
           python3 scripts/check_docs.py
           shellcheck scripts/*.sh
           git diff --check
       - name: C static analysis
-        run: cppcheck --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
+        run: |
+          # Keep the version guard active when system headers are not discovered.
+          curl_vernum=$(curl-config --vernum)
+          cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
         run: make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
       - name: Valgrind
@@ -100,6 +118,7 @@ jobs:
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_input.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_runtime.py
           GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_runtime.py
+          GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
           valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
 
   gate:

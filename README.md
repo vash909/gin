@@ -18,8 +18,10 @@ are the planned transport, not direct IRC.
 
 ## Build and test
 
-Only a C99 compiler and POSIX make are required to build. Tests additionally
-require Python 3 (development only).
+A C99 compiler, POSIX make and TLS-enabled libcurl >=7.85.0 development
+headers/libraries are required to build. Tests additionally require Python 3
+and OpenSSL (development only). See the [isolated REST/TLS API](docs/HTTP.md)
+for dependency selection and genuine musl builds; the CLI remains local-only.
 
 ```sh
 make
@@ -88,8 +90,10 @@ but implements local input only, not a connected messaging client.
   frontend toolchain or server deployment is required to build gin.
 - C99/POSIX core, foreground single-process design, bounded buffers and explicit
   errors. No TUI, database, plugin framework or custom cryptographic protocol.
-- Planned isolated network adapters: libcurl (REST/TLS), libwebsockets
-  (WebSocket/TLS), Jansson (JSON). They are not linked by the scaffold.
+- Isolated synchronous GET adapter: libcurl (verified REST/TLS), not wired into
+  CLI/runtime callbacks. Planned: libwebsockets (WebSocket/TLS), Jansson (JSON).
+  Only libcurl is now linked; authentication and protocol negotiation remain
+  separate future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
 - E2EE is deferred, **not TLS**. Encrypted conversations must eventually be

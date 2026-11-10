@@ -2,26 +2,33 @@
 # Reproduce the local Linux quality gates without network access.
 set -eu
 cd "$(dirname "$0")/.."
+host_curl_config=${CURL_CONFIG:-curl-config}
 sh scripts/bootstrap.sh
 python3 scripts/check_docs.py
 shellcheck scripts/*.sh
-cppcheck --std=c99 --enable=warning,performance,portability --error-exitcode=1 \
+# cppcheck does not inherit the compiler's system-header search paths.
+curl_vernum=$("$host_curl_config" --vernum)
+cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" \
+    --std=c99 --enable=warning,performance,portability --error-exitcode=1 \
     --inline-suppr --suppress=missingIncludeSystem -I include src
-for compiler in gcc clang musl-gcc; do
-    make clean
-    make CC="$compiler" check
+for compiler in gcc clang; do
+    make CURL_CONFIG="$host_curl_config" clean
+    make CC="$compiler" CURL_CONFIG="$host_curl_config" check
  done
-make clean
-bmake CC=cc check
-make clean
-make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' \
+: "${CURL_CONFIG_MUSL:?Set CURL_CONFIG_MUSL to a genuine musl TLS libcurl curl-config}"
+make CURL_CONFIG="$host_curl_config" clean
+make CC=musl-gcc CURL_CONFIG="$CURL_CONFIG_MUSL" LDFLAGS=-static check
+make CURL_CONFIG="$host_curl_config" clean
+bmake CC=cc CURL_CONFIG="$host_curl_config" check
+make CURL_CONFIG="$host_curl_config" clean
+make CC=gcc CURL_CONFIG="$host_curl_config" CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' \
     LDFLAGS='-fsanitize=address,undefined -no-pie' check
-make clean
-make CC=gcc check
+make CURL_CONFIG="$host_curl_config" clean
+make CC=gcc CURL_CONFIG="$host_curl_config" check
 stage="$(pwd)/.build/stage"
-make DESTDIR="$stage" PREFIX=/usr install
+make CURL_CONFIG="$host_curl_config" DESTDIR="$stage" PREFIX=/usr install
 "$stage/usr/bin/gin" --version
-make DESTDIR="$stage" PREFIX=/usr uninstall
+make CURL_CONFIG="$host_curl_config" DESTDIR="$stage" PREFIX=/usr uninstall
 test ! -e "$stage/usr/bin/gin"
 test ! -e "$stage/usr/share/man/man1/gin.1"
 valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all \
@@ -29,4 +36,6 @@ valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=al
 git diff --check
 GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_runtime.py
+GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
 printf '%s\n' 'All local development checks passed.'

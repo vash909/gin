@@ -11,12 +11,13 @@ case ${1-} in
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends build-essential clang clang-tools \
             cppcheck valgrind gdb pkg-config libcurl4-openssl-dev libwebsockets-dev \
-            libjansson-dev libssl-dev musl-tools bmake shellcheck python3 ca-certificates
+            libjansson-dev libssl-dev musl-tools bmake shellcheck python3 ca-certificates \
+            openssl cmake curl xz-utils bzip2
         ;;
     *) echo 'Usage: sh scripts/bootstrap.sh [--install]' >&2; exit 2 ;;
 esac
 missing=0
-for tool in cc gcc clang make bmake musl-gcc python3 shellcheck cppcheck valgrind gdb pkg-config; do
+for tool in cc gcc clang make bmake musl-gcc python3 shellcheck cppcheck valgrind gdb pkg-config openssl; do
     if command -v "$tool" >/dev/null 2>&1; then
         printf '%s: %s\n' "$tool" "$(command -v "$tool")"
     else
@@ -24,12 +25,23 @@ for tool in cc gcc clang make bmake musl-gcc python3 shellcheck cppcheck valgrin
         missing=1
     fi
 done
-for library in libcurl libwebsockets jansson openssl; do
+for library in libwebsockets jansson openssl; do
     if pkg-config --exists "$library"; then
         printf '%s: %s\n' "$library" "$(pkg-config --modversion "$library")"
     else
-        printf 'Missing future transport development dependency: %s\n' "$library" >&2
+        printf 'Missing transport development dependency: %s\n' "$library" >&2
         missing=1
     fi
 done
+curl_config=${CURL_CONFIG:-curl-config}
+if command -v "$curl_config" >/dev/null 2>&1; then
+    printf 'curl-config: %s\n' "$("$curl_config" --version)"
+    if ! "$curl_config" --checkfor 7.85.0 >/dev/null 2>&1; then
+        echo 'REST/TLS requires curl-config from libcurl >=7.85.0.' >&2
+        missing=1
+    fi
+else
+    printf 'Missing curl-config command: %s\n' "$curl_config" >&2
+    missing=1
+fi
 exit "$missing"

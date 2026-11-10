@@ -27,11 +27,15 @@ Those numbers describe upstream, not implemented gin support. See
 | Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
 | Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
 | Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
-| Transport | None | Grappa REST plus Phoenix Channels over verified TLS |
+| Transport | Isolated bounded libcurl GET/TLS API, not connected to runtime | Grappa REST plus Phoenix Channels integration |
 | Runtime | One foreground local-only process using POSIX `poll()` and signal self-pipe | Network adapter integration |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
-The implemented boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
+The isolated [REST/TLS API](HTTP.md) is implemented in `src/http.c` /
+`include/gin_http.h`; it is synchronous and must not run inside poll callbacks.
+It does not add authentication, JSON parsing or Grappa compatibility.
+
+The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
 and `include/gin_fs.h`. `src/input.c` / `include/gin_input.h` provide the
 length-aware bounded input API; [INPUT.md](INPUT.md) defines exact byte, EOF,
