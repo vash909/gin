@@ -43,4 +43,10 @@ GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors
     python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
 GIN_AUTH_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_auth.py AuthTests.test_stateful_revocation_and_explicit_persistence
+valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
+    .build/test_protocol_parse
+GIN_PROTOCOL_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_protocol.py ProtocolTests.test_gated_login_order \
+    ProtocolTests.test_resume_and_fresh_preflight_each_call \
+    ProtocolTests.test_auth_failures_preserve_phase_and_clear_output
 printf '%s\n' 'All local development checks passed.'

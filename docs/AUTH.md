@@ -5,10 +5,11 @@
 `include/gin_auth.h` / `src/auth.c` implement synchronous account-user login,
 bearer identity validation and current-bearer logout. They are reusable native C
 APIs, not connected CLI commands. `gin run`, configuration and poll callbacks
-remain local-only. No discovery, protocol negotiation, WebSocket, messaging,
-OAuth, TOTP or passkey interaction is implemented. Outside synthetic fixtures,
-the caller **must perform the protocol-discovery policy in PROTOCOL.md before
-sending credentials**. This module declares no gin protocol version and passing
+remain local-only. The separate [discovery and gated-auth APIs](DISCOVERY.md)
+provide the recommended fresh-preflight path. No WebSocket, messaging, OAuth,
+TOTP or passkey interaction is implemented. Outside synthetic fixtures, the
+low-level caller **must perform the protocol-discovery policy in PROTOCOL.md
+before sending credentials**. This module declares no gin protocol version and passing
 fixtures do not qualify compatibility with a live Grappa revision.
 
 The wire subset was checked against Grappa commit

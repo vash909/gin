@@ -1,5 +1,10 @@
 # Development
 
+The [isolated discovery and gated-auth APIs](DISCOVERY.md) are exercised by
+`make check` in every existing compiler/platform lane. Decoder unit tests and
+real native HTTPS fixtures use synthetic policies, not a qualified gin wire
+declaration. No CLI/network-runtime integration is introduced.
+
 ## Requirements
 
 The executable needs a C99 compiler, POSIX.1-2008 headers/libc and POSIX make.
