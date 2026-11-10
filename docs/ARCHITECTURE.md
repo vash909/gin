@@ -41,6 +41,11 @@ and server floors before authentication. The isolated [owned topology API](TOPOL
 adds fresh config -> bound identity -> one boot fetch, stable numeric/slug/target
 mapping and pure full-query-snapshot replacement. REST boot leaves query inventory
 unknown; WebSocket acquisition, subscriptions and runtime projection remain planned.
+The isolated [Phoenix v2 TEXT API](PHOENIX.md), in `src/phoenix.c`,
+`src/phoenix_stream.c` and `src/phoenix_refs.c`, adds pure bounded framing,
+explicit-message collection, reply identity helpers and owner-local references.
+It has no sockets, authentication, timers, subscriptions or pending registry and
+is not wired into runtime callbacks. A matching reply is not operation success.
 
 The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`

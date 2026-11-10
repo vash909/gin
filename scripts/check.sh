@@ -57,4 +57,8 @@ valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=a
     .build/test_topology_lookup
 GIN_TOPOLOGY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_topology.py
+for unit in test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+    valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
+        ".build/$unit"
+done
 printf '%s\n' 'All local development checks passed.'

@@ -13,6 +13,10 @@ Gin is a development scaffold, not a released or operational Grappa client.
   gated authentication](DISCOVERY.md) and [owned topology snapshots](TOPOLOGY.md);
   REST query inventory remains unknown without a user-topic snapshot, and no
   WebSocket acquisition or live Grappa qualification is claimed. See [authentication scope](AUTH.md).
+- Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
+  explicit-message fragment collection and reply/reference fixtures only;
+  stricter local reference/object-payload policies are documented there.
+  No RFC6455, handshake, subscription, liveness or live compatibility claim.
 - Published beta/stable releases: **none**.
 
 The proposed server feature floor in [PROTOCOL.md](PROTOCOL.md) is a design

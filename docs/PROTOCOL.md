@@ -136,7 +136,12 @@ Source: `GrappaWeb.UserSocket.connect/3`, `check_protocol_version/1`,
 
 ## Exact Phoenix v2 frame shape
 
-UTF-8 JSON messages are **five-element arrays**, not Phoenix v1 objects:
+Text encoding emits **exactly five-element arrays**, not Phoenix v1 objects.
+The [isolated pure codec](PHOENIX.md) accepts at least five elements on decode,
+matching the pinned Phoenix serializer and Grappa splitter, but validates the
+whole JSON document including ignored trailing elements. Its bounded string/null
+references, object payloads and strict metadata rules are intentional local
+supported-subset restrictions, not generic upstream-decoder requirements:
 
 ```text
 [join_ref, ref, topic, event, payload]
