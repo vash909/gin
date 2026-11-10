@@ -6,7 +6,10 @@ host_curl_config=${CURL_CONFIG:-curl-config}
 sh scripts/bootstrap.sh
 python3 scripts/check_docs.py
 shellcheck scripts/*.sh
-cppcheck --std=c99 --enable=warning,performance,portability --error-exitcode=1 \
+# cppcheck does not inherit the compiler's system-header search paths.
+curl_vernum=$("$host_curl_config" --vernum)
+cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" \
+    --std=c99 --enable=warning,performance,portability --error-exitcode=1 \
     --inline-suppr --suppress=missingIncludeSystem -I include src
 for compiler in gcc clang; do
     make CURL_CONFIG="$host_curl_config" clean

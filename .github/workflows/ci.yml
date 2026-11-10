@@ -103,7 +103,10 @@ jobs:
           shellcheck scripts/*.sh
           git diff --check
       - name: C static analysis
-        run: cppcheck --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
+        run: |
+          # Keep the version guard active when system headers are not discovered.
+          curl_vernum=$(curl-config --vernum)
+          cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
         run: make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
       - name: Valgrind

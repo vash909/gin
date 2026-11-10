@@ -255,8 +255,10 @@ class HTTPTests(unittest.TestCase):
         self.assertLess(time.monotonic() - start, 3)
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
-            url = f"http://127.0.0.1:{reserved.getsockname()[1]}/"
-            self.assertEqual(self.request(url)[0::2], ("transport", b""))
+            port = reserved.getsockname()[1]
+        # Close before connecting: bound-but-not-listening need not send RST.
+        url = f"http://127.0.0.1:{port}/"
+        self.assertEqual(self.request(url)[0::2], ("transport", b""))
 
     def test_tls_trust_and_hostname(self):
         ca = self.certdir / "ca.pem"
