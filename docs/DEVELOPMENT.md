@@ -81,6 +81,24 @@ ASan uses a non-PIE executable in the Linux gate to avoid address-space mapping
 collisions on hosts with restrictive/randomized mappings; this is not a
 production build setting. CI tests the non-sanitized executable as well.
 
+## Pure Phoenix TEXT testing
+
+The [Phoenix API](PHOENIX.md) adds no dependency or runtime command. Every
+`make check` lane runs `.build/test_phoenix` (real codec/owned cleanup),
+`.build/test_phoenix_stream` (real collector + real codec, split and fault cases),
+`.build/test_phoenix_collect` (standalone decode facade, collector contract only)
+and `.build/test_phoenix_refs` (independent local counter). The facade must not
+link the actual codec; otherwise it defines decode twice. The real core unit
+includes `src/phoenix.c` for test-only allocation failure/wipe checks; the real
+stream unit includes `src/phoenix_stream.c` and separately links the core.
+Makefile prerequisites include the implementation files, without compiling an
+included source twice. Isolated Jansson allocator injection is test-only and
+restores the allocator after freeing every DOM. Some internal library allocation
+failures may be classified as malformed JSON; no perfect OOM classification is
+claimed. All four units also run under Valgrind in CI and `scripts/check.sh`;
+normal platform, musl, NDEBUG and sanitizer `make check` lanes include them.
+Fixtures need no server and do not qualify a real WebSocket connection.
+
 ## Owned topology testing
 
 The [topology API](TOPOLOGY.md) adds no dependencies. `make check` includes the
