@@ -81,6 +81,22 @@ ASan uses a non-PIE executable in the Linux gate to avoid address-space mapping
 collisions on hosts with restrictive/randomized mappings; this is not a
 production build setting. CI tests the non-sanitized executable as well.
 
+## Owned topology testing
+
+The [topology API](TOPOLOGY.md) adds no dependencies. `make check` includes the
+real pure snapshot/ownership unit, a separate read-accessor-facade lookup contract
+unit, and synthetic verified-HTTPS fetch fixtures. The pure unit includes the
+actual core translation unit to inject deterministic owned-allocation failures;
+never link that unit with a second `src/topology.c`. The lookup facade unit links
+only lookup plus naming, not real parser accessors. Production has no allocation
+fault flags or replacement global Jansson allocator.
+
+`scripts/check.sh` runs these through the existing GCC, Clang, genuine static
+musl, BSD make and sanitizer lanes, adds an explicit `-DNDEBUG` lane, and runs
+pure/lookup/fetch tests under Valgrind. `GIN_TOPOLOGY_DRIVER` selects a private
+fetch driver; `GIN_TOPOLOGY_PREFIX` instruments fixture requests. None of this
+qualifies a live Grappa deployment. Linux, macOS and FreeBSD CI remain required.
+
 ## Install without root for inspection
 
 ```sh

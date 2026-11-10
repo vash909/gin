@@ -18,7 +18,8 @@ Grappa canonical target identity folds ASCII A–Z unconditionally for channels
 canonical-target explanation at lines 81–93). It is independent of an IRC
 network's CASEMAPPING. Do not substitute RFC1459 folding: brackets, braces,
 backslash, pipe, caret and tilde remain distinct. Do not Unicode-case-fold.
-Resource lookup and future discovery must still use explicit upstream metadata.
+Resource lookup and [topology discovery](TOPOLOGY.md) use explicit upstream
+metadata, not filenames or local NONCHANNEL classification as DM evidence.
 
 The encode/decode APIs take NUL-terminated, non-NULL inputs and explicit output
 capacities **including the trailing NUL**; input/output buffers must not overlap.

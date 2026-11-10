@@ -24,6 +24,8 @@ make CC=musl-gcc CURL_CONFIG="$CURL_CONFIG_MUSL" \
 make CURL_CONFIG="$host_curl_config" clean
 bmake CC=cc CURL_CONFIG="$host_curl_config" check
 make CURL_CONFIG="$host_curl_config" clean
+make CC=gcc CURL_CONFIG="$host_curl_config" CFLAGS='-O2 -DNDEBUG' check
+make CURL_CONFIG="$host_curl_config" clean
 make CC=gcc CURL_CONFIG="$host_curl_config" CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' \
     LDFLAGS='-fsanitize=address,undefined -no-pie' check
 make CURL_CONFIG="$host_curl_config" clean
@@ -49,4 +51,10 @@ GIN_PROTOCOL_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --er
     python3 tests/test_protocol.py ProtocolTests.test_gated_login_order \
     ProtocolTests.test_resume_and_fresh_preflight_each_call \
     ProtocolTests.test_auth_failures_preserve_phase_and_clear_output
+valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
+    .build/test_topology
+valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
+    .build/test_topology_lookup
+GIN_TOPOLOGY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_topology.py
 printf '%s\n' 'All local development checks passed.'

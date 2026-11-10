@@ -93,8 +93,10 @@ but implements local input only, not a connected messaging client.
 - Isolated synchronous REST/TLS and account [authentication APIs](docs/AUTH.md),
   with private credential storage; libcurl and Jansson are linked. They are not
   wired into CLI/runtime callbacks. Isolated [HTTP protocol discovery and gated
-  authentication](docs/DISCOVERY.md) are implemented; WebSocket negotiation and
-  libwebsockets integration remain future work.
+  authentication](docs/DISCOVERY.md) are implemented, alongside isolated
+  [owned network/window topology](docs/TOPOLOGY.md) fetch and pure snapshot APIs.
+  REST boot leaves query inventory unknown until a decoded user-topic snapshot;
+  WebSocket negotiation and libwebsockets integration remain future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
 - E2EE is deferred, **not TLS**. Encrypted conversations must eventually be

@@ -16,9 +16,9 @@ JANSSON_LIBS = $${JANSSON_LIBS:-$$(pkg-config --libs jansson)}
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -94,7 +94,23 @@ all: .build/gin
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_protocol_parse.c src/protocol_parse.c $(JANSSON_LIBS) $(LDLIBS)
 
-check: all .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+.build/test_topology: tests/test_topology.c src/topology.c src/topology_lookup.c src/topology_internal.h src/naming.c include/gin_topology.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_topology.c src/topology_lookup.c src/naming.c $(JANSSON_LIBS) $(LDLIBS)
+
+# The lookup contract unit supplies its own read-only accessor facade.
+.build/test_topology_lookup: tests/test_topology_lookup.c src/topology_lookup.c src/naming.c include/gin_topology.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_topology_lookup.c src/topology_lookup.c src/naming.c $(LDLIBS)
+
+.build/topology_driver: tests/topology_driver.c src/topology.c src/topology_lookup.c src/topology_fetch.c src/topology_internal.h src/protocol.c src/protocol_parse.c src/auth.c src/http.c src/credential.c src/naming.c include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_http.h include/gin_credential.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/topology_driver.c src/topology.c src/topology_lookup.c src/topology_fetch.c src/protocol.c src/protocol_parse.c src/auth.c src/http.c src/credential.c src/naming.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+check: all .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+	.build/test_topology
+	.build/test_topology_lookup
+	$(PYTHON) tests/test_topology.py
 	.build/test_protocol_parse
 	$(PYTHON) tests/test_protocol.py
 	.build/test_auth_bounds

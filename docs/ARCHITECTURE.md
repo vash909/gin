@@ -37,7 +37,10 @@ The separate [account authentication API](AUTH.md) adds bounded JSON login,
 identity and logout with explicit [private storage](CREDENTIALS.md), but no
 runtime connection or Grappa compatibility claim. The separate
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) enforce independent caller
-and server floors before authentication; WebSocket negotiation remains planned.
+and server floors before authentication. The isolated [owned topology API](TOPOLOGY.md)
+adds fresh config -> bound identity -> one boot fetch, stable numeric/slug/target
+mapping and pure full-query-snapshot replacement. REST boot leaves query inventory
+unknown; WebSocket acquisition, subscriptions and runtime projection remain planned.
 
 The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
