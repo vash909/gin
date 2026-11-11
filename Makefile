@@ -16,9 +16,9 @@ JANSSON_LIBS = $${JANSSON_LIBS:-$$(pkg-config --libs jansson)}
 
 all: .build/gin
 
-.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+.build/gin: src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/connect.c src/connect_protocols.c src/connect_topic.c include/gin_connect.h src/connect_values.h src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/connect.c src/connect_protocols.c src/connect_topic.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -125,7 +125,13 @@ all: .build/gin
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_phoenix_refs.c src/phoenix_refs.c $(LDLIBS)
 
-check: all .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+check: all .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+	.build/test_connect
+	.build/test_connect_protocols
+	.build/test_connect_topic
+	$(PYTHON) tests/test_ws_fixture_frames.py
+	$(PYTHON) tests/test_build_host_curl.py
+	$(PYTHON) tests/test_connect.py
 	.build/test_phoenix
 	.build/test_phoenix_stream
 	.build/test_phoenix_collect
@@ -148,6 +154,24 @@ check: all .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_co
 	$(PYTHON) tests/test_input.py
 	$(PYTHON) tests/test_runtime.py
 	$(PYTHON) tests/test_http.py
+
+CONNECT_SOURCES = src/connect.c src/connect_protocols.c src/connect_topic.c src/http.c src/auth.c src/credential.c src/protocol.c src/protocol_parse.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c
+
+.build/connect_driver: tests/connect_driver.c $(CONNECT_SOURCES) include/gin_connect.h src/connect_values.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/connect_driver.c $(CONNECT_SOURCES) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_connect: tests/test_connect.c $(CONNECT_SOURCES) include/gin_connect.h src/connect_values.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_connect.c src/connect_protocols.c src/connect_topic.c src/http.c src/auth.c src/credential.c src/protocol.c src/protocol_parse.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_connect_protocols: tests/test_connect_protocols.c src/connect_protocols.c src/connect_values.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(LDFLAGS) -o $@ tests/test_connect_protocols.c src/connect_protocols.c $(LDLIBS)
+
+.build/test_connect_topic: tests/test_connect_topic.c src/connect_topic.c src/connect_values.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(LDFLAGS) -o $@ tests/test_connect_topic.c src/connect_topic.c $(LDLIBS)
 
 clean:
 	rm -rf .build

@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Optional, cast
+from typing import Any, Optional, cast
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -152,7 +152,7 @@ class HTTPTests(unittest.TestCase):
         ctx.load_cert_chain(self.certdir / (name+".pem"), self.certdir / (name+".key"))
         return ctx
 
-    def request(self, url, ca="-", local=1, connect=500, total=1000,
+    def request(self, url, ca: Any="-", local=1, connect=500, total=1000,
                 body=1024, headers=4096, env=None):
         p = subprocess.run(PREFIX + [str(ROOT / ".build/http_driver"), url,
             str(ca), str(local), str(connect), str(total), str(body), str(headers)],
@@ -262,15 +262,18 @@ class HTTPTests(unittest.TestCase):
 
     def test_tls_trust_and_hostname(self):
         ca = self.certdir / "ca.pem"
+        # Instrumented OpenSSL setup needs a separate fixture budget.
+        # Explicit timeout tests retain their original settings.
+        budget: dict[str, Any] = dict(connect=3000, total=6000) if PREFIX else {}
         with server(self.tls()) as srv:
             url = f"https://127.0.0.1:{srv.server_port}/"
-            self.assertEqual(self.request(url, ca=ca, local=0)[:3], ("ok", 200, b"a\x00b\xffc"))
-            self.assertEqual(self.request(url, ca=self.certdir / "bad.pem")[0::2], ("tls", b""))
-            self.assertEqual(self.request(url)[0::2], ("tls", b""))
-            self.assertEqual(self.request(url, ca=self.certdir / "missing.pem")[0::2], ("tls", b""))
+            self.assertEqual(self.request(url, ca=ca, local=0, **budget)[:3], ("ok", 200, b"a\x00b\xffc"))
+            self.assertEqual(self.request(url, ca=self.certdir / "bad.pem", **budget)[0::2], ("tls", b""))
+            self.assertEqual(self.request(url, **budget)[0::2], ("tls", b""))
+            self.assertEqual(self.request(url, ca=self.certdir / "missing.pem", **budget)[0::2], ("tls", b""))
             self.assertEqual(len(srv.requests), 1)
         with server(self.tls("wrong")) as srv:
-            self.assertEqual(self.request(f"https://127.0.0.1:{srv.server_port}/", ca=ca)[0::2],
+            self.assertEqual(self.request(f"https://127.0.0.1:{srv.server_port}/", ca=ca, **budget)[0::2],
                              ("tls", b""))
             self.assertEqual(srv.requests, [])
 

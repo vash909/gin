@@ -1,5 +1,9 @@
 # Isolated HTTP protocol discovery and gated authentication
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Scope and caller policy
 
 `include/gin_protocol.h`, `src/protocol_parse.c` and `src/protocol.c` implement

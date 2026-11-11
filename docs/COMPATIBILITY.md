@@ -1,5 +1,9 @@
 # Protocol compatibility and release records
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Current status
 
 Gin is a development scaffold, not a released or operational Grappa client.
@@ -12,7 +16,8 @@ Gin is a development scaffold, not a released or operational Grappa client.
   only, including bounded JSON, private credentials and [HTTP discovery with
   gated authentication](DISCOVERY.md) and [owned topology snapshots](TOPOLOGY.md);
   REST query inventory remains unknown without a user-topic snapshot, and no
-  WebSocket acquisition or live Grappa qualification is claimed. See [authentication scope](AUTH.md).
+  live Grappa qualification is claimed; isolated WebSocket acquisition is in
+  [CONNECT.md](CONNECT.md). See [authentication scope](AUTH.md).
 - Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
   explicit-message fragment collection and reply/reference fixtures only;
   stricter local reference/object-payload policies are documented there.

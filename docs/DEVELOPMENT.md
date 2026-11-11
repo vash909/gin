@@ -1,5 +1,9 @@
 # Development
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 The [isolated discovery and gated-auth APIs](DISCOVERY.md) are exercised by
 `make check` in every existing compiler/platform lane. Decoder unit tests and
 real native HTTPS fixtures use synthetic policies, not a qualified gin wire
@@ -8,8 +12,9 @@ declaration. No CLI/network-runtime integration is introduced.
 ## Requirements
 
 The executable needs a C99 compiler, POSIX.1-2008 headers/libc and POSIX make.
-The isolated REST/TLS adapter now requires libcurl >=7.85.0 with TLS and
-asynchronous DNS. Account authentication requires Jansson >=2.14. Tests use Python 3 and OpenSSL, never at runtime. See
+The whole application requires libcurl >=8.23.0 with TLS, asynchronous DNS
+and WS/WSS enabled. Older stock packages are insufficient; use the pinned
+[native curl recipe](CONNECT.md) when necessary. Account authentication requires Jansson >=2.14. Tests use Python 3 and OpenSSL, never at runtime. See
 [HTTP.md](HTTP.md) for API limits, curl-config/pkg-config overrides and the
 pinned user-prefix musl TLS recipe.
 No SDK, Grappa checkout, BEAM, Node, containers or cloud credentials are needed.
@@ -29,9 +34,9 @@ sh scripts/bootstrap.sh --install
 This installs system packages through apt and sudo; it does not modify shell
 startup files, download arbitrary installers or start services. It includes GCC,
 Clang/static tools, make/BSD make, musl, GDB, Valgrind, cppcheck, ShellCheck,
-Python 3, pkg-config and the libcurl/libwebsockets/Jansson/OpenSSL development
-packages. libcurl and Jansson are required and linked; libwebsockets
-still prepares for a future adapter and is not linked.
+Python 3, pkg-config and libcurl/Jansson/OpenSSL development packages.
+libcurl and Jansson are linked; libwebsockets is not required. Package
+installation alone does not establish the required curl version or WS support.
 
 Set environment `CURL_CONFIG` to select the host `curl-config` checked by
 `scripts/bootstrap.sh` and used by the host builds in `scripts/check.sh`;

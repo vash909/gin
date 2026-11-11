@@ -1,5 +1,9 @@
 # Bounded REST/TLS adapter
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Actual scope
 
 `include/gin_http.h` and `src/http.c` provide a synchronous, length-aware
@@ -101,8 +105,9 @@ process-wide SIGPIPE policy belongs to the application owner, not this adapter.
 
 ## Build and reproducibility
 
-libcurl **>=7.85.0**, with TLS and asynchronous DNS, is now an explicit build
-and adapter runtime requirement. `CURLOPT_PROTOCOLS_STR` and
+The standalone HTTP adapter retains its **>=7.85.0** floor, but the whole
+application requires **>=8.23.0**, TLS, asynchronous DNS and WS/WSS for the
+[connection API](CONNECT.md). `CURLOPT_PROTOCOLS_STR` and
 `CURLOPT_REDIR_PROTOCOLS_STR` were added in 7.85.0; compile-time and runtime
 version checks reject older libraries. Linux host coverage includes 7.88.1.
 The executable still uses strict C99/POSIX make; authentication adds Jansson
@@ -111,7 +116,7 @@ The executable still uses strict C99/POSIX make; authentication adds Jansson
 explicit `CURL_CONFIG=` on its command line. `scripts/bootstrap.sh` and the
 host builds in `scripts/check.sh` also honor an environment `CURL_CONFIG`
 (default `curl-config`) and pass it explicitly to host `make`/`bmake`;
-bootstrap checks that selected command with `curl-config --checkfor 7.85.0`.
+bootstrap checks `curl-config --checkfor 8.23.0` plus SSL/AsynchDNS/WS/WSS.
 Use `CURL_CONFIG_MUSL` only for the genuine-musl gate in `scripts/check.sh`.
 `CURL_CFLAGS` and `CURL_LIBS` may be
 overridden explicitly, for example with matching `pkg-config --cflags libcurl`

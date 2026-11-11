@@ -6,9 +6,10 @@ This is an implementation guide for **planned transport**, not a claim that
 gin can connect. The repository provides local CLI/filesystem
 initialization plus a bounded local input C API and local-only foreground
 runtime. An isolated [bounded HTTP/TLS GET API](HTTP.md) now exists, but no
-CLI connection, WebSocket, message sender or E2EE. The isolated
-[HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights;
-WebSocket negotiation remains future work.
+CLI connection, message sender or E2EE. The isolated
+[HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights.
+The isolated [connection API](CONNECT.md) now implements verified WSS and
+root-first subscriptions; CLI/runtime integration remains future work.
 Separate [account authentication APIs](AUTH.md) implement bounded JSON and
 private credentials outside runtime callbacks. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).
@@ -115,14 +116,17 @@ Phoenix's serializer. They are unrelated versions. Source:
 `GrappaWeb.UserSocket.check_protocol_version/1` and the reference client's
 `ws_upgrade_request()`.[11][16]
 
-Offer `phoenix` and the authentication subprotocol
-`base64url.bearer.phx.<base64url(raw-token)>` in `Sec-WebSocket-Protocol`.
-The documentation's `<token>` notation is shorthand: the raw client reference
-**base64url-encodes the bearer bytes** with `base64url_encode()` before
-`ws_upgrade_request()`. Do not append the raw bearer, add `Bearer ` inside that
-encoding, or send `?token=`. Phoenix decodes it to `connect_info.auth_token`;
+Offer `phoenix` and `base64url.bearer.phx.<standard-unpadded-Base64(raw-token)>`
+in `Sec-WebSocket-Protocol`. Despite the historical prefix, Phoenix requires
+standard Base64, not the URL-safe alphabet (`aa~` becomes `YWF+`). Pinned Phoenix
+`734c8d1c32253627e234c8a1cb831367191ff5dd`, `assets/js/phoenix/socket.js:398-399`
+uses `btoa` with padding removed; `lib/phoenix/transports/websocket.ex:111-116`
+uses `Base.decode64!` with padding false. This corrects gin's former interpretation
+based only on the C reference. See [connection policy](CONNECT.md).
+Do not append the raw bearer, add `Bearer ` inside the encoding, or send
+`?token=`. Phoenix exposes the decoded token as `connect_info.auth_token`;
 `GrappaWeb.UserSocket.extract_token/1` accepts that source only. Endpoint
-configuration enables this with socket-level `auth_token: true`.[16][11][12]
+configuration enables socket-level `auth_token: true`.[11][12]
 
 A readable declaration below the server floor is rejected with 426 and an
 `upgrade_required` JSON body containing both version numbers. Bad/missing auth

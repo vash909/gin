@@ -18,7 +18,7 @@ are the planned transport, not direct IRC.
 
 ## Build and test
 
-A C99 compiler, POSIX make and TLS-enabled libcurl >=7.85.0 development
+A C99 compiler, POSIX make and TLS-enabled libcurl >=8.23.0 development
 headers/libraries and Jansson >=2.14 are required to build. Tests additionally require Python 3
 and OpenSSL (development only). See the [isolated REST/TLS API](docs/HTTP.md)
 for dependency selection and genuine musl builds; the CLI remains local-only.
@@ -98,7 +98,8 @@ but implements local input only, not a connected messaging client.
   REST boot leaves query inventory unknown until a decoded user-topic snapshot.
   The isolated [Phoenix v2 TEXT API](docs/PHOENIX.md) adds bounded encode/decode,
   explicit-message fragment collection, reply identity matching and local refs;
-  WebSocket negotiation and libwebsockets integration remain future work.
+  the isolated [verified-WSS connection API](docs/CONNECT.md) adds root-first
+  correlated subscriptions through libcurl. CLI/runtime integration remains future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
 - E2EE is deferred, **not TLS**. Encrypted conversations must eventually be

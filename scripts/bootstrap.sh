@@ -10,7 +10,7 @@ case ${1-} in
         fi
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends build-essential clang clang-tools \
-            cppcheck valgrind gdb pkg-config libcurl4-openssl-dev libwebsockets-dev \
+            cppcheck valgrind gdb pkg-config libcurl4-openssl-dev \
             libjansson-dev libssl-dev musl-tools bmake shellcheck python3 ca-certificates \
             openssl cmake curl xz-utils bzip2
         ;;
@@ -25,7 +25,7 @@ for tool in cc gcc clang make bmake musl-gcc python3 shellcheck cppcheck valgrin
         missing=1
     fi
 done
-for library in libwebsockets jansson openssl; do
+for library in jansson openssl; do
     if pkg-config --exists "$library"; then
         printf '%s: %s\n' "$library" "$(pkg-config --modversion "$library")"
     else
@@ -40,10 +40,24 @@ fi
 curl_config=${CURL_CONFIG:-curl-config}
 if command -v "$curl_config" >/dev/null 2>&1; then
     printf 'curl-config: %s\n' "$("$curl_config" --version)"
-    if ! "$curl_config" --checkfor 7.85.0 >/dev/null 2>&1; then
-        echo 'REST/TLS requires curl-config from libcurl >=7.85.0.' >&2
+    if ! "$curl_config" --checkfor 8.23.0 >/dev/null 2>&1; then
+        echo 'REST/TLS requires curl-config from libcurl >=8.23.0.' >&2
         missing=1
     fi
+    protocols=$("$curl_config" --protocols)
+    for protocol in WS WSS; do
+        if ! printf '%s\n' "$protocols" | tr ' ' '\n' | grep -ix "$protocol" >/dev/null; then
+            echo "libcurl requires $protocol support." >&2
+            missing=1
+        fi
+    done
+    features=$("$curl_config" --features)
+    for feature in SSL AsynchDNS; do
+        if ! printf '%s\n' "$features" | tr ' ' '\n' | grep -ix "$feature" >/dev/null; then
+            echo "libcurl requires $feature support." >&2
+            missing=1
+        fi
+    done
 else
     printf 'Missing curl-config command: %s\n' "$curl_config" >&2
     missing=1

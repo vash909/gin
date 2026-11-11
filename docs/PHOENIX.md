@@ -1,5 +1,9 @@
 # Pure Phoenix v2 TEXT API
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Scope and sources
 
 `include/gin_phoenix.h`, `src/phoenix.c`, `src/phoenix_stream.c` and
