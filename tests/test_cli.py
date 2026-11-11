@@ -112,8 +112,39 @@ class GinTests(unittest.TestCase):
                     finally:
                         os.chown(path, os.geteuid(), -1)
 
+    def test_no_arguments_prints_banner_only_on_stdout(self):
+        result = subprocess.run([str(BIN)], cwd=self.base, capture_output=True)
+        expected = (
+            "       :####:   ######   ###   ##\n"
+            "   ######   ######   ###   ##\n"
+            " :##:  .#     ##     ###:  ##\n"
+            " ##:          ##     ####  ##\n"
+            " ##.          ##     ##:#: ##\n"
+            " ##           ##     ## ## ##\n"
+            " ##  ####     ##     ## ## ##\n"
+            " ##. ####     ##     ## :#:##\n"
+            " ##:   ##     ##     ##  ####\n"
+            " :##:  ##     ##     ##  :###\n"
+            "  #######   ######   ##   ###\n"
+            "   :####.   ######   ##   ###\n"
+            "\n —. .. -. \n"
+        ).encode("utf-8")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, expected)
+        self.assertEqual(result.stderr, b"gin: invalid arguments; use --help\n")
+        self.assertEqual(list(self.base.iterdir()), [])
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+        self.assertTrue(readme.startswith("```text\n"))
+        self.assertEqual(readme.split("```", 2)[1].partition("\n")[2].rstrip("\n"),
+                         expected.decode("utf-8").rstrip(" \n"))
+        for args in (("--help",), ("--version",), ("--unknown",)):
+            with self.subTest(args=args):
+                other = subprocess.run([str(BIN), *args], cwd=self.base, capture_output=True)
+                self.assertNotIn(b":####:", other.stdout)
+                self.assertNotIn("—. .. -.".encode("utf-8"), other.stdout)
+
     def test_invalid_cli_is_usage_error_without_side_effects(self):
-        commands = [(), ("check",), ("run",), ("--help", "extra"),
+        commands = [("check",), ("run",), ("--help", "extra"),
                     ("--version", "extra"), ("init",),
                     ("init", "-d", self.root, "-n", "azzurra"),
                     ("init", "-z"),
