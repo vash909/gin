@@ -59,7 +59,9 @@ GIN_TOPOLOGY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --er
     python3 tests/test_topology.py
 GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_connect.py
-for unit in test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+GIN_LIVENESS_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_liveness.py
+for unit in test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
     valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
         ".build/$unit"
 done

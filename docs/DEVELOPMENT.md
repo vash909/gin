@@ -104,6 +104,16 @@ claimed. All four units also run under Valgrind in CI and `scripts/check.sh`;
 normal platform, musl, NDEBUG and sanitizer `make check` lanes include them.
 Fixtures need no server and do not qualify a real WebSocket connection.
 
+## Native liveness testing
+
+The [native liveness policy](LIVENESS.md) adds a pure capped-backoff unit,
+private translation-unit clock/I/O tests and verified local HTTPS/WSS fixtures.
+All `make check` lanes include them. `GIN_LIVENESS_DRIVER` selects a private
+native driver and `GIN_LIVENESS_PREFIX` supplies an instrumentation wrapper;
+Valgrind runs in the full local and CI gates. Shims are test-only and do not
+qualify real libcurl/TLS behavior; native fixtures cover that separate boundary.
+The CLI remains local-only, with no live Grappa compatibility claim.
+
 ## Owned topology testing
 
 The [topology API](TOPOLOGY.md) adds no dependencies. `make check` includes the

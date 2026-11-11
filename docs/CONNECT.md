@@ -60,13 +60,16 @@ Only joined-topic nonreply application frames reach the borrowed-frame callback.
 Null join-reference broadcasts are allowed; nonnull stale generations are
 ignored. `phx_reply` never reaches the application. Complete TEXT messages use
 the existing explicit-FIN collector; ping/pong do not terminate partial text.
-libcurl supplies WebSocket control handling, including automatic pong. No
-Phoenix heartbeat, automatic backoff/reconnect, sender, renderer, history or
-E2EE support is added here (roadmap 13 onward).
+libcurl supplies WebSocket control handling, including automatic pong. The
+separate opt-in [native liveness policy](LIVENESS.md) adds Phoenix heartbeats
+and owner-driven bounded reconnect scheduling without hidden HTTP in service.
+Sender, renderer, history and E2EE remain separate APIs or later work.
 
-Explicit close is abortive/idempotent, not remote logout/PART. Explicit restart
-repeats preflight and root-first joins, advances the attempt epoch and preserves
-monotonic request refs for the whole session. No invented epoch bytes can
+Explicit close is abortive/idempotent, not remote logout/PART. Unconfigured
+explicit restart repeats preflight and root-first joins, advances the attempt
+epoch and preserves monotonic request refs for the whole session. Configured
+liveness uses a lifetime retry budget and explicit-close cancellation; recognized
+session severance is always terminal. No invented epoch bytes can
 distinguish otherwise identical broadcasts. Free closes curl before releasing
 headers/state and best-effort wipes owned secrets, not library allocator copies.
 

@@ -116,8 +116,9 @@ The operation deadline covers enqueue, bounded partial writes and reply wait.
 Short/AGAIN writes retain the exact unsent offset. Timeout, transport loss or
 explicit close preserves a terminal receipt: NOT_SENT only if no bytes were
 written, otherwise UNCERTAIN. A new start cannot silently discard an unconsumed
-receipt. References/epochs do not reset or wrap; there is no replay or automatic
-reconnect. Freeing a session explicitly abandons its remaining owned receipt.
+receipt. References/epochs do not reset or wrap; there is no replay. The opt-in
+[liveness policy](LIVENESS.md) schedules owner-driven bounded reconnects only
+after that receipt is consumed. Freeing a session explicitly abandons its receipt.
 An explicit server error is REMOTE_FAILURE, not proof of no prior side effects.
 
 A `query_windows_list` application event is a separate full replacement snapshot,
@@ -127,5 +128,6 @@ change inventory. Copy borrowed callback data into bounded owner storage and
 apply snapshots after service returns. Opening a query neither sends a chat
 message nor proves peer presence, encryption state or recipient delivery.
 
-Heartbeat/backoff, session-expiry recovery, connected CLI/runtime scheduling and
-history/gap recovery remain separate work. No new E2EE capability is introduced.
+Heartbeat/backoff and session-severance handling belong to the separate native
+liveness policy. Connected CLI/runtime scheduling and history/gap recovery remain
+future work. No new E2EE capability is introduced.
