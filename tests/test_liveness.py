@@ -19,6 +19,7 @@ import subprocess
 import threading
 import time
 import unittest
+from typing import Any, cast
 
 import test_http
 from ws_fixture_frames import server_frame, take_client_frame
@@ -43,6 +44,7 @@ class Server(http.server.ThreadingHTTPServer):
         self.stopped = threading.Event()
         self.upgrades = 0
         self.mode = "ok"
+        self.expected_tls_rejection = False
 
     def record(self, collection, value):
         with self.cv:
@@ -63,6 +65,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
+
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionResetError, BrokenPipeError):
+            # Certificate rejection may disconnect before any HTTP request.
+            # Keep valid-TLS and post-request resets visible to handle_error.
+            srv = cast(Server, self.server)
+            if not srv.expected_tls_rejection or hasattr(self, "raw_requestline"):
+                raise
 
     def do_GET(self):
         srv = self.server
@@ -260,6 +272,54 @@ class Driver:
         self.test.assertEqual(stderr, "")
 
 
+class FixtureResetTests(unittest.TestCase):
+    def reset_before_request(self, expected_tls_rejection, prefix=b"",
+                             error_type: type[ConnectionError] = ConnectionResetError):
+        import io
+
+        class ResetReader(io.BytesIO):
+            def readline(self, *args, **kwargs):
+                line = super().readline(*args, **kwargs)
+                if line:
+                    return line
+                raise error_type("fixture peer disconnected")
+
+        class ResetConnection(socket.socket):
+            def makefile(self, *args, **kwargs) -> Any:
+                return ResetReader(prefix)
+
+            def shutdown(self, how):
+                pass
+
+        srv = Server(("127.0.0.1", 0))
+        srv.expected_tls_rejection = expected_tls_rejection
+        try:
+            # Real stdlib request dispatch, with the CI-observed socket fault.
+            srv.process_request_thread(ResetConnection(), ("127.0.0.1", 1))
+            return srv.errors
+        finally:
+            srv.server_close()
+
+    def test_expected_tls_rejection_reset_before_http(self):
+        for error_type in (ConnectionResetError, BrokenPipeError):
+            with self.subTest(error=error_type.__name__):
+                self.assertEqual(self.reset_before_request(True, error_type=error_type), [])
+
+    def test_valid_tls_fixture_reset_is_still_an_error(self):
+        for error_type in (ConnectionResetError, BrokenPipeError):
+            with self.subTest(error=error_type.__name__):
+                errors = self.reset_before_request(False, error_type=error_type)
+                self.assertEqual(len(errors), 1)
+                self.assertIn(error_type.__name__, errors[0])
+
+    def test_reset_after_request_line_is_still_an_error(self):
+        for error_type in (ConnectionResetError, BrokenPipeError):
+            with self.subTest(error=error_type.__name__):
+                errors = self.reset_before_request(True, b"GET /api/config HTTP/1.1\r\n", error_type)
+                self.assertEqual(len(errors), 1)
+                self.assertIn(error_type.__name__, errors[0])
+
+
 class LivenessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -275,6 +335,7 @@ class LivenessTests(unittest.TestCase):
     def fixture(self, mode="ok", cert="good", ca="ca.pem", **settings):
         srv = Server(("127.0.0.1", 0))
         srv.mode = mode
+        srv.expected_tls_rejection = cert != "good" or ca != "ca.pem"
         srv.socket = self.tls(cert).wrap_socket(srv.socket, server_side=True)
         thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": .02})
         thread.start()
