@@ -106,7 +106,7 @@ jobs:
             mkdir -p "$TMPDIR"
             sh scripts/build-host-curl.sh
             export CURL_CONFIG="$GIN_CURL_PREFIX/bin/curl-config"
-            make CC=cc CURL_CONFIG="$CURL_CONFIG" check
+            make CC=cc CURL_CONFIG="$CURL_CONFIG" CURL_LIBS="$("$CURL_CONFIG" --static-libs)" check
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
             .build/stage/usr/bin/gin --version
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr uninstall

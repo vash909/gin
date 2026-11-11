@@ -18,8 +18,14 @@ an explicit user prefix with OpenSSL and no system installation:
 ```sh
 GIN_CURL_PREFIX="$HOME/.local/gin-curl" TMPDIR="$HOME/private-build" \
   sh scripts/build-host-curl.sh
-make CURL_CONFIG="$HOME/.local/gin-curl/bin/curl-config" check
+curl_config="$HOME/.local/gin-curl/bin/curl-config"
+make CURL_CONFIG="$curl_config" CURL_LIBS="$("$curl_config" --static-libs)" check
 ```
+
+Use `--static-libs` for this static-only SDK: unlike `--libs`, it retains private
+dependency library search paths. This matters on FreeBSD, where ports OpenSSL
+can coexist with a different base-system version. Keep the default `CURL_LIBS`
+selection for ordinary shared-library installations.
 
 The caller owns `gin_http_global_init()` before start and cleanup after free.
 `new` validates and deep-copies settings, credentials and the requested topic
