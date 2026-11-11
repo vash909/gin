@@ -37,7 +37,7 @@ struct gin_send_result gin_send_plain(const struct gin_root *root,
     struct gin_http_result response;
     char *path = NULL, *url = NULL;
     unsigned char *json = NULL, *reply = NULL;
-    size_t json_length = 0, url_length;
+    size_t json_length = 0, url_length = 0;
     r.request_id = id; r.code = GIN_SEND_INVALID;
     r.protocol = GIN_PROTOCOL_INVALID; r.auth = GIN_AUTH_INVALID;
     memset(&verified, 0, sizeof(verified));
