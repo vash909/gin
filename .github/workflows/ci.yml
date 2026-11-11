@@ -30,11 +30,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select independent Ubuntu archive mirror
-        if: runner.os == 'Linux'
-        run: |
-          test -f /etc/apt/apt-mirrors.txt
-          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install REST/TLS development dependency
         run: |
           if [ "${{ runner.os }}" = Linux ]; then
@@ -72,11 +67,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select independent Ubuntu archive mirror
-        if: runner.os == 'Linux'
-        run: |
-          test -f /etc/apt/apt-mirrors.txt
-          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install developer tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake cmake curl xz-utils bzip2 libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Build pinned musl TLS dependencies
@@ -128,11 +118,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select independent Ubuntu archive mirror
-        if: runner.os == 'Linux'
-        run: |
-          test -f /etc/apt/apt-mirrors.txt
-          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install analysis tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Build native WebSocket curl
