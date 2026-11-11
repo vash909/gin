@@ -155,7 +155,8 @@ jobs:
           GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_connect.py
           GIN_RENDER_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_render.py
           sudo env TMPDIR="$PWD/.build/root-tests" .build/test_render_output
-          for unit in test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+          GIN_SEND_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_send.py
+          for unit in test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
             valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all ".build/$unit"
           done
           valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_topology

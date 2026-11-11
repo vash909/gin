@@ -68,6 +68,11 @@ it does not authenticate, contact a server, open an input reader, or send a chat
 message. Do not infer operational behavior
 from the presence of directories or the word `in`.
 
+The isolated [plain-send API](SEND.md) accepts explicit owner route/mode and a
+unique local operation ID, performs fresh discovery and bound identity, then one
+REST POST outside all callbacks. It retains one held root and has no runtime
+queue, replay or local echo. `gin run` remains local-only.
+
 ## Implemented local projection
 
 ```sh
