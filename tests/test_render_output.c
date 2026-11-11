@@ -1,3 +1,7 @@
+/* Expose POSIX.1-2008 realpath in this test translation unit. */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
 #define _DARWIN_C_SOURCE 1
 #endif
@@ -38,6 +42,7 @@ static void make_out(int directory)
 int main(void)
 {
     const char *base = getenv("TMPDIR");
+    char *resolved;
     char temp[4096], rootpath[4096], contents[16];
     struct gin_root root = GIN_ROOT_INITIALIZER, empty = GIN_ROOT_INITIALIZER;
     struct stat first, second;
@@ -45,7 +50,12 @@ int main(void)
     if (base == NULL) base = ".build";
     n = snprintf(temp, sizeof(temp), "%s/gin-output.XXXXXX", base);
     assert(n > 0 && (size_t)n < sizeof(temp) && mkdtemp(temp) != NULL);
-    n = snprintf(rootpath, sizeof(rootpath), "%s/root", temp);
+    /* Normal fixture paths may inherit a symlinked TMPDIR (Darwin /var).
+     * Resolve only our private temporary directory, not hostile test inputs. */
+    resolved = realpath(temp, NULL);
+    assert(resolved != NULL);
+    n = snprintf(rootpath, sizeof(rootpath), "%s/root", resolved);
+    free(resolved);
     assert(n > 0 && (size_t)n < sizeof(rootpath));
     assert(gin_root_acquire(rootpath, &root) == 0);
     assert(gin_root_init(&root, "test", "#Room", "#") == 0);
