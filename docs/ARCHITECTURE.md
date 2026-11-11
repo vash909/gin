@@ -1,5 +1,9 @@
 # Architecture
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Scope and project boundary
 
 Gin is an **independent companion project**: a headless Unix file/FIFO frontend
@@ -40,7 +44,8 @@ runtime connection or Grappa compatibility claim. The separate
 and server floors before authentication. The isolated [owned topology API](TOPOLOGY.md)
 adds fresh config -> bound identity -> one boot fetch, stable numeric/slug/target
 mapping and pure full-query-snapshot replacement. REST boot leaves query inventory
-unknown; WebSocket acquisition, subscriptions and runtime projection remain planned.
+unknown; the separate connection API acquires verified WSS subscriptions, while
+runtime projection remains planned.
 The isolated [Phoenix v2 TEXT API](PHOENIX.md), in `src/phoenix.c`,
 `src/phoenix_stream.c` and `src/phoenix_refs.c`, adds pure bounded framing,
 explicit-message collection, reply identity helpers and owner-local references.
@@ -181,14 +186,13 @@ Adapter dependencies:
 
 | Dependency | Status and responsibility |
 | --- | --- |
-| libcurl >=7.85.0 | Linked; REST requests, verified TLS and bounded responses/deadlines |
+| libcurl >=8.23.0 | Linked; REST/TLS and WS/WSS, asynchronous DNS and bounded transport |
 | Jansson >=2.14 | Linked; JSON encoding/decoding at authentication and discovery boundaries |
-| libwebsockets | Planned and unlinked; WebSocket/TLS upgrade, frame handling and service integration |
 
-libcurl and Jansson are build requirements. libwebsockets remains a future dependency choice, not a tested integration.
+libcurl and Jansson are build requirements. There is no libwebsockets dependency.
 The core should consume typed resource/events and return explicit effects;
-keep library handles and callbacks inside the adapter. Integrating two network
-libraries with one `poll()` loop needs a tested descriptor/timer ownership
+keep library handles and callbacks inside the adapter. Integrating the native network
+adapters with one `poll()` loop needs a tested descriptor/timer ownership
 contract. Do not hide blocking login, DNS or history operations inside the FIFO
 reader and call that a nonblocking design. No Elixir or Node dependency should
 leak into build/install steps for this independent client.

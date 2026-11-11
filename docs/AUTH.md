@@ -1,5 +1,9 @@
 # Isolated account authentication API
 
+The separate [verified-WSS native connection API](CONNECT.md) adds isolated
+root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
+No live Grappa interoperability is claimed.
+
 ## Scope and prerequisites
 
 `include/gin_auth.h` / `src/auth.c` implement synchronous account-user login,

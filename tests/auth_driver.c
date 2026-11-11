@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -22,6 +23,7 @@ int main(int argc, char **argv)
     struct gin_credential value, out;
     struct gin_auth_settings s;
     enum gin_auth_code code;
+    const char *prefix = getenv("GIN_AUTH_PREFIX");
     assert(argc == 5 || argc == 6);
     fd = open(argv[4], O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     assert(fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode));
@@ -31,6 +33,10 @@ int main(int argc, char **argv)
     secret[n] = 0;
     assert((size_t)n == strlen(secret));
     s.origin = argv[2]; s.ca_file = argv[3]; s.connect_ms = 500; s.total_ms = 1500;
+    /* Instrumented fixture TLS setup needs time; production policy is unchanged. */
+    if (prefix != NULL && *prefix != '\0') {
+        s.connect_ms = 3000; s.total_ms = 6000;
+    }
     memset(&value, 0, sizeof(value)); memset(&out, 0xa5, sizeof(out));
     assert(gin_http_global_init() == GIN_HTTP_OK);
     if (!strcmp(argv[1], "cycle")) {

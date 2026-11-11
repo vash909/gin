@@ -27,7 +27,7 @@ jobs:
           - os: macos-15
             cc: clang
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install REST/TLS development dependency
@@ -40,6 +40,14 @@ jobs:
             echo "CURL_CONFIG=$(brew --prefix curl)/bin/curl-config" >> "$GITHUB_ENV"
             echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
           fi
+      - name: Build native WebSocket curl on Linux
+        if: runner.os == 'Linux'
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl
+        run: |
+          sh scripts/build-host-curl.sh
+          echo "CURL_CONFIG=$GIN_CURL_PREFIX/bin/curl-config" >> "$GITHUB_ENV"
       - name: Build and test strict C99/POSIX
         env:
           CC: ${{ matrix.cc }}
@@ -68,10 +76,17 @@ jobs:
         run: sh scripts/build-musl-http.sh
       - name: musl libc and actual musl TLS libcurl
         run: make CC=musl-gcc CURL_CONFIG="$RUNNER_TEMP/gin-musl/bin/curl-config" JANSSON_CFLAGS="-I$RUNNER_TEMP/gin-musl/include" JANSSON_LIBS="-L$RUNNER_TEMP/gin-musl/lib -ljansson" LDFLAGS=-static check
+      - name: Build native WebSocket curl
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl
+        run: |
+          sh scripts/build-host-curl.sh
+          echo "CURL_CONFIG=$GIN_CURL_PREFIX/bin/curl-config" >> "$GITHUB_ENV"
       - name: BSD make
-        run: make clean && bmake CC=cc check
+        run: make clean && bmake CC=cc CURL_CONFIG="$CURL_CONFIG" check
       - name: Assertions remain active with NDEBUG
-        run: make clean && make CC=gcc CFLAGS='-O2 -DNDEBUG' check
+        run: make clean && make CC=gcc CURL_CONFIG="$CURL_CONFIG" CFLAGS='-O2 -DNDEBUG' check
 
   freebsd:
     runs-on: ubuntu-24.04
@@ -85,7 +100,12 @@ jobs:
           usesh: true
           prepare: pkg install -y python3 curl jansson pkgconf openssl
           run: |
-            make CC=cc check
+            export TMPDIR="$PWD/.build-native-curl"
+            export GIN_CURL_PREFIX="$PWD/.native-curl"
+            mkdir -p "$TMPDIR"
+            sh scripts/build-host-curl.sh
+            export CURL_CONFIG="$GIN_CURL_PREFIX/bin/curl-config"
+            make CC=cc CURL_CONFIG="$CURL_CONFIG" check
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr install
             .build/stage/usr/bin/gin --version
             make DESTDIR="$PWD/.build/stage" PREFIX=/usr uninstall
@@ -94,11 +114,18 @@ jobs:
 
   analysis:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install analysis tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
+      - name: Build native WebSocket curl
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl
+        run: |
+          sh scripts/build-host-curl.sh
+          echo "CURL_CONFIG=$GIN_CURL_PREFIX/bin/curl-config" >> "$GITHUB_ENV"
       - name: Documentation and script checks
         run: |
           python3 scripts/check_docs.py
@@ -107,15 +134,15 @@ jobs:
       - name: C static analysis
         run: |
           # Keep the version guard active when system headers are not discovered.
-          curl_vernum=$(curl-config --vernum)
+          curl_vernum=$("$CURL_CONFIG" --vernum)
           jansson_verhex=$(pkg-config --modversion jansson | python3 -c 'import sys; p=[int(x) for x in sys.stdin.read().strip().split(".")]; print(hex((p[0]<<16)|(p[1]<<8)|(p[2] if len(p)>2 else 0)))')
           cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" "-DJANSSON_VERSION_HEX=$jansson_verhex" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
-        run: make CC=gcc CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
+        run: make CC=gcc CURL_CONFIG="$CURL_CONFIG" CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
       - name: Valgrind
         run: |
           make clean
-          make CC=gcc check
+          make CC=gcc CURL_CONFIG="$CURL_CONFIG" check
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_cli.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_locking.py
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_input.py
@@ -124,7 +151,8 @@ jobs:
           GIN_RUNTIME_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_runtime.py
           GIN_HTTP_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_http.py HTTPTests.test_tls_trust_and_hostname
           GIN_AUTH_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_auth.py AuthTests.test_stateful_revocation_and_explicit_persistence
-          for unit in test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+          GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_connect.py
+          for unit in test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
             valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all ".build/$unit"
           done
           valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_topology
