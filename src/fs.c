@@ -123,38 +123,54 @@ check_endpoint(const struct stat *st, int fifo)
 }
 
 static int
-output_file(int parent)
+existing_endpoint(int parent, const char *name, int fifo, int flags)
 {
-    struct stat before, after;
-    int fd;
-    const int flags = O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+    struct stat before, opened, after;
+    int fd, saved;
 
-    fd = openat(parent, "out", flags | O_CREAT | O_EXCL, 0600);
-    if (fd == -1) {
-        if (errno != EEXIST ||
-            fstatat(parent, "out", &before, AT_SYMLINK_NOFOLLOW) == -1 ||
-            check_endpoint(&before, 0) == -1)
-            return -1;
-        fd = openat(parent, "out", flags);
-        if (fd == -1)
-            return -1;
-        if (fstat(fd, &after) == -1 || check_endpoint(&after, 0) == -1)
-            goto fail;
-        if (before.st_dev != after.st_dev || before.st_ino != after.st_ino) {
-            errno = EPERM;
-            goto fail;
-        }
-    } else if (fstat(fd, &after) == -1 || check_endpoint(&after, 0) == -1) {
+    if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&before, fifo) == -1)
+        return -1;
+    fd = openat(parent, name, flags);
+    if (fd == -1)
+        return -1;
+    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, fifo) == -1 ||
+        fstatat(parent, name, &after, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&after, fifo) == -1)
+        goto fail;
+    if (before.st_dev != opened.st_dev || before.st_ino != opened.st_ino ||
+        after.st_dev != opened.st_dev || after.st_ino != opened.st_ino) {
+        errno = EPERM;
         goto fail;
     }
     return fd;
 fail:
-    {
-        int saved = errno;
+    saved = errno;
+    (void)close(fd);
+    errno = saved;
+    return -1;
+}
+
+static int
+output_file(int parent)
+{
+    struct stat opened;
+    int fd, saved;
+    const int flags = O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+
+    fd = openat(parent, "out", flags | O_CREAT | O_EXCL, 0600);
+    if (fd == -1) {
+        if (errno == EEXIST)
+            return existing_endpoint(parent, "out", 0, flags);
+        return -1;
+    }
+    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, 0) == -1) {
+        saved = errno;
         (void)close(fd);
         errno = saved;
+        return -1;
     }
-    return -1;
+    return fd;
 }
 
 /* Never replace, truncate or remove this inode: its persistence is intentional. */
@@ -330,7 +346,6 @@ gin_root_input_open(const struct gin_root *root, const char *network,
                     const char *target, const char *chantypes)
 {
     struct gin_name name;
-    struct stat before, opened, after;
     int netfd = -1, winfd = -1, fd = -1, result = -1, saved;
 
     if (root->rootfd == -1 || root->lockfd == -1) {
@@ -346,21 +361,10 @@ gin_root_input_open(const struct gin_root *root, const char *network,
     winfd = input_dir(netfd, name.window_component);
     if (winfd == -1)
         goto done;
-    if (fstatat(winfd, "in", &before, AT_SYMLINK_NOFOLLOW) == -1 ||
-        check_endpoint(&before, 1) == -1)
-        goto done;
-    fd = openat(winfd, "in", O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    fd = existing_endpoint(winfd, "in", 1,
+                           O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd == -1)
         goto done;
-    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, 1) == -1 ||
-        fstatat(winfd, "in", &after, AT_SYMLINK_NOFOLLOW) == -1 ||
-        check_endpoint(&after, 1) == -1)
-        goto done;
-    if (before.st_dev != opened.st_dev || before.st_ino != opened.st_ino ||
-        after.st_dev != opened.st_dev || after.st_ino != opened.st_ino) {
-        errno = EPERM;
-        goto done;
-    }
     result = fd;
     fd = -1;
 done:
@@ -373,6 +377,39 @@ done:
         (void)close(netfd);
     errno = saved;
     return result;
+}
+
+int
+gin_root_output_open(const struct gin_root *root, const char *network,
+                     const char *target, const char *chantypes)
+{
+    struct gin_name name;
+    int netfd = -1, winfd = -1, fd = -1, saved;
+
+    if (root == NULL || network == NULL || target == NULL || chantypes == NULL ||
+        root->rootfd == -1 || root->lockfd == -1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1)
+        return -1;
+    netfd = input_dir(root->rootfd, name.network_component);
+    if (netfd == -1)
+        goto done;
+    winfd = input_dir(netfd, name.window_component);
+    if (winfd == -1)
+        goto done;
+    fd = existing_endpoint(winfd, "out", 0,
+        O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+done:
+    saved = errno;
+    if (winfd != -1)
+        (void)close(winfd);
+    if (netfd != -1)
+        (void)close(netfd);
+    errno = saved;
+    return fd;
 }
 
 int

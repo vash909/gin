@@ -9,7 +9,8 @@ runtime. An isolated [bounded HTTP/TLS GET API](HTTP.md) now exists, but no
 CLI connection, message sender or E2EE. The isolated
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights.
 The isolated [connection API](CONNECT.md) now implements verified WSS and
-root-first subscriptions; CLI/runtime integration remains future work.
+root-first subscriptions. The isolated [renderer and append API](RENDER.md)
+projects source-derived incoming records; CLI/runtime integration remains future work.
 Separate [account authentication APIs](AUTH.md) implement bounded JSON and
 private credentials outside runtime callbacks. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).

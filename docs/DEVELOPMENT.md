@@ -213,3 +213,8 @@ pointer and gin's guides together through a PR. Review the source linked in
 fixtures when behavior changes. Do not import Grappa's runtime source tree or
 auto-regenerate a claimed contract from upstream main. Each future release must
 record the qualification evidence specified in [COMPATIBILITY.md](COMPATIBILITY.md).
+
+The isolated [incoming-event renderer and append API](RENDER.md) projects
+owned, bounded records and supports held-root append outside callbacks. Native
+loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
+qualification is claimed.

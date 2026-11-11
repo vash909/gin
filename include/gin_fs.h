@@ -33,6 +33,15 @@ int gin_root_release(struct gin_root *root);
 int gin_root_input_open(const struct gin_root *root, const char *network,
                          const char *target, const char *chantypes);
 
+/* Open only an EXISTING initialized window out through one live held root.
+ * Returns caller-owned O_WRONLY|O_APPEND|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC fd,
+ * or -1 with errno. Validate private directories and owned0600/single-link
+ * regular file, preserving before/open/after inode checks. No create/repair,
+ * truncation or lock manipulation. Close before releasing the same held root.
+ */
+int gin_root_output_open(const struct gin_root *root, const char *network,
+                          const char *target, const char *chantypes);
+
 int gin_init(const char *root, const char *network, const char *target,
              const char *chantypes);
 
