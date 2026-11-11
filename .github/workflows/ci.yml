@@ -100,8 +100,9 @@ jobs:
           usesh: true
           prepare: pkg install -y python3 curl jansson pkgconf openssl
           run: |
-            export TMPDIR="$PWD/.build-native-curl"
-            export GIN_CURL_PREFIX="$PWD/.native-curl"
+            native_curl_root=$(mktemp -d "${TMPDIR:-/tmp}/gin-native-curl.XXXXXXXXXX")
+            export TMPDIR="$native_curl_root/build"
+            export GIN_CURL_PREFIX="$native_curl_root/prefix"
             mkdir -p "$TMPDIR"
             sh scripts/build-host-curl.sh
             export CURL_CONFIG="$GIN_CURL_PREFIX/bin/curl-config"
