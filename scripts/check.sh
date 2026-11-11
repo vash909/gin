@@ -59,8 +59,10 @@ GIN_TOPOLOGY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --er
     python3 tests/test_topology.py
 GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_connect.py
-for unit in test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+for unit in test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
     valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
         ".build/$unit"
 done
+GIN_RENDER_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_render.py
 printf '%s\n' 'All local development checks passed.'

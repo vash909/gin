@@ -30,7 +30,7 @@ Those numbers describe upstream, not implemented gin support. See
 | CLI | `--help`, `--version`, `init`, read-only `check`, local-only `run`, explicit `-f` configuration | Connected operation |
 | Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
 | Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
-| Output | Creates/reuses log without truncating it | Escaped timestamped events and visible errors |
+| Output | Creates/reuses log; isolated escaped/timestamped renderer and checked append API | Connected runtime integration |
 | Transport | Isolated bounded libcurl GET/POST/DELETE TLS and account authentication APIs, not connected to runtime | Grappa REST plus Phoenix Channels integration |
 | Runtime | One foreground local-only process using POSIX `poll()` and signal self-pipe | Network adapter integration |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
@@ -307,3 +307,8 @@ otherwise help expose.[2]
 [17] https://github.com/vjt/grappa-irc/issues/2588
 [19] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/me_controller.ex
 [21] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/session/wire.ex
+
+The isolated [incoming-event renderer and append API](RENDER.md) projects
+owned, bounded records and supports held-root append outside callbacks. Native
+loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
+qualification is claimed.
