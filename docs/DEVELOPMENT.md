@@ -223,3 +223,13 @@ Plain-send native tests are part of `make check`: `tests/test_send.py` composes
 a real FIFO, HTTPS and WSS receive path outside callbacks. `GIN_SEND_PREFIX`
 selects an instrumentation wrapper and `GIN_SEND_DRIVER` a private driver.
 See [SEND.md](SEND.md) for limits and scope; fixtures are not live qualification.
+
+Minimal-control tests also run in `make check`: the command parser unit, REST
+control unit/FIFO fixtures, deterministic query short-write unit and real
+FIFO/WSS query matrix. `GIN_CONTROL_PREFIX` and `GIN_QUERY_PREFIX` select
+instrumentation wrappers; their corresponding `_DRIVER` variables select private
+driver executables. Query fixtures widen only instrumented setup/normal-reply
+budgets, retaining the separate short silent-deadline case and exact wire/order
+assertions. The local check script and CI include these under Valgrind; CI also
+runs the local root-rejection case in its existing isolated privileged lane.
+See [CONTROL.md](CONTROL.md). `gin run` still cannot execute these commands.

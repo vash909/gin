@@ -1,5 +1,6 @@
 #include "gin_connect.h"
 #include "connect_values.h"
+#include "gin_command.h"
 #include <curl/curl.h>
 #include <jansson.h>
 #include <errno.h>
@@ -41,6 +42,9 @@ struct gin_connect {
     struct timespec deadline;
     size_t header_bytes;
     int selection_count, selection_ok, header_limit;
+    struct gin_query_result query;
+    struct timespec query_deadline;
+    int config_protocol, root_protocol, in_callback, query_written;
 };
 static void wipe(void *p, size_t n)
 {
@@ -67,6 +71,69 @@ static int deadline(struct timespec *t, long ms)
     if (t->tv_nsec >= 1000000000) { t->tv_sec++; t->tv_nsec -= 1000000000; }
     return 1;
 }
+struct gin_query_result gin_connect_query_result(const struct gin_connect *s)
+{ struct gin_query_result r = {0}; return s ? s->query : r; }
+int gin_connect_query_take(struct gin_connect *s, struct gin_query_result *out)
+{
+    if (!s || !out || s->in_callback) return -1;
+    if (s->query.outcome == GIN_QUERY_NONE || s->query.outcome == GIN_QUERY_PENDING) return 0;
+    *out = s->query; memset(&s->query, 0, sizeof(s->query)); return 1;
+}
+enum gin_query_code gin_connect_open_query(struct gin_connect *s,
+    const struct gin_topology *topology, const char *slug, const char *nick,
+    const char *chantypes, enum gin_query_mode mode, uint64_t id, unsigned timeout_ms)
+{
+    struct gin_query_result q = {0};
+    struct gin_command command;
+    struct gin_phoenix_fields f;
+    struct gin_phoenix_refs refs;
+    struct gin_phoenix_bytes bytes = {NULL, 0};
+    struct timespec end;
+    const struct gin_topology_network *network;
+    unsigned char record[7 + GIN_COMMAND_NICK_MAX + 1];
+    size_t n;
+    json_t *payload;
+    char *json;
+    enum gin_phoenix_code code;
+    if (!s || s->in_callback) return GIN_QUERY_INVALID;
+    if (s->query.outcome != GIN_QUERY_NONE || s->outbound.data) return GIN_QUERY_BUSY;
+    if (s->state != GIN_CONNECT_READY || !s->result.socket_epoch ||
+        s->topics[0].status.state != GIN_CONNECT_TOPIC_JOINED ||
+        !s->topics[0].status.join_ref || !s->topics[0].ref[0]) return GIN_QUERY_UNAVAILABLE;
+    if (!id || !timeout_ms || timeout_ms > 60000 || !nick || !slug || !chantypes) return GIN_QUERY_INVALID;
+    if (mode != GIN_QUERY_MODE_PLAIN) return GIN_QUERY_UNSUPPORTED;
+    if (s->config_protocol < 4 || s->root_protocol < 4) return GIN_QUERY_UNSUPPORTED;
+    for (n = 0; n <= GIN_COMMAND_NICK_MAX && nick[n]; n++) {}
+    if (n > GIN_COMMAND_NICK_MAX) return GIN_QUERY_LIMIT;
+    memcpy(record, "/query ", 7); memcpy(record + 7, nick, n);
+    if (gin_command_parse(record, 7 + n, chantypes, &command) != GIN_COMMAND_OK ||
+        command.kind != GIN_COMMAND_QUERY) return GIN_QUERY_INVALID;
+    network = gin_topology_find_slug(topology, slug);
+    if (!network || network->id <= 0) return GIN_QUERY_INVALID;
+    if (!deadline(&end, (long)timeout_ms)) return GIN_QUERY_TRANSPORT;
+    refs = s->refs;
+    code = gin_phoenix_refs_next(&refs, q.request_ref, sizeof(q.request_ref));
+    if (code != GIN_PHOENIX_OK) return GIN_QUERY_LIMIT;
+    memcpy(q.join_ref, s->topics[0].ref, sizeof(q.join_ref));
+    payload = json_pack("{s:I,s:s}", "network_id", (json_int_t)network->id, "target_nick", nick);
+    if (!payload) return GIN_QUERY_NOMEM;
+    json = json_dumps(payload, JSON_COMPACT); json_decref(payload);
+    if (!json) return GIN_QUERY_NOMEM;
+    f.join_ref = q.join_ref; f.ref = q.request_ref; f.topic = s->topics[0].text;
+    f.event = "open_query_window"; f.payload.data = (const unsigned char *)json; f.payload.length = strlen(json);
+    code = gin_phoenix_encode(&f, &bytes); free(json);
+    if (code != GIN_PHOENIX_OK) return code == GIN_PHOENIX_NOMEM ? GIN_QUERY_NOMEM : GIN_QUERY_LIMIT;
+    q.operation_id = id; q.socket_epoch = s->result.socket_epoch; q.outcome = GIN_QUERY_PENDING;
+    s->refs = refs; s->query = q; s->query_deadline = end; s->query_written = 0;
+    s->outbound = bytes; s->offset = 0;
+    return GIN_QUERY_OK;
+}
+static void query_abort(struct gin_connect *s, enum gin_query_code code)
+{
+    if (s->query.outcome != GIN_QUERY_PENDING) return;
+    s->query.code = code;
+    s->query.outcome = s->query_written ? GIN_QUERY_UNCERTAIN : GIN_QUERY_NOT_SENT;
+}
 static void transport_close(struct gin_connect *s)
 {
     size_t i;
@@ -89,6 +156,9 @@ static void transport_close(struct gin_connect *s)
 }
 static enum gin_connect_code fail(struct gin_connect *s, enum gin_connect_code c)
 {
+    query_abort(s, c == GIN_CONNECT_TIMEOUT ? GIN_QUERY_TIMEOUT :
+        c == GIN_CONNECT_MALFORMED ? GIN_QUERY_MALFORMED :
+        c == GIN_CONNECT_CLOSED ? GIN_QUERY_CLOSED : GIN_QUERY_TRANSPORT);
     transport_close(s); s->state = GIN_CONNECT_FAILED; s->result.code = c; return c;
 }
 static int available(void)
@@ -202,7 +272,7 @@ enum gin_connect_code gin_connect_start(struct gin_connect *s)
     char url[GIN_CREDENTIAL_ORIGIN_MAX + 100], offer[GIN_WS_PROTOCOL_CAP], line[GIN_WS_PROTOCOL_CAP + 32];
     size_t n, i;
     CURLcode c;
-    if (!s || s->state == GIN_CONNECT_CONNECTING || s->state == GIN_CONNECT_JOINING || s->state == GIN_CONNECT_READY)
+    if (!s || s->in_callback || s->query.outcome != GIN_QUERY_NONE || s->state == GIN_CONNECT_CONNECTING || s->state == GIN_CONNECT_JOINING || s->state == GIN_CONNECT_READY)
         return GIN_CONNECT_INVALID;
     if (s->result.socket_epoch == UINT64_MAX) return fail(s, GIN_CONNECT_LIMIT);
     {
@@ -216,6 +286,7 @@ enum gin_connect_code gin_connect_start(struct gin_connect *s)
     if (!available()) return fail(s, GIN_CONNECT_UNAVAILABLE);
     s->result.protocol = gin_protocol_fetch(&s->settings.http, &s->settings.policy, &info);
     if (s->result.protocol != GIN_PROTOCOL_OK) return fail(s, GIN_CONNECT_PREFLIGHT);
+    s->config_protocol = info.server_protocol; s->root_protocol = 0;
     s->result.auth_attempted = 1;
     s->result.auth = gin_auth_identity(&s->settings.http, &s->credential, &identity);
     if (s->result.auth != GIN_AUTH_OK) {
@@ -291,6 +362,7 @@ static enum gin_connect_code receive_frame(struct gin_connect *s, struct gin_pho
                 json_t *v = root ? json_object_get(root, "protocol_version") : NULL;
                 int valid = json_is_integer(v) && json_integer_value(v) > 0 &&
                     json_integer_value(v) <= INT_MAX && json_integer_value(v) >= s->settings.policy.required_server_protocol;
+                if (valid) s->root_protocol = (int)json_integer_value(v);
                 json_decref(root);
                 if (!valid) return fail(s, GIN_CONNECT_PREFLIGHT);
             }
@@ -302,14 +374,27 @@ static enum gin_connect_code receive_frame(struct gin_connect *s, struct gin_pho
             return GIN_CONNECT_OK;
         }
     }
+    if (s->query.outcome == GIN_QUERY_PENDING &&
+        s->query.socket_epoch == s->result.socket_epoch &&
+        s->topics[0].status.state == GIN_CONNECT_TOPIC_JOINED &&
+        !strcmp(s->query.join_ref, s->topics[0].ref) &&
+        gin_phoenix_reply_matches(frame, s->topics[0].text, s->query.join_ref, s->query.request_ref)) {
+        const struct gin_phoenix_reply *r = gin_phoenix_frame_reply(frame);
+        if (!remaining(&s->query_deadline)) return fail(s, GIN_CONNECT_TIMEOUT);
+        if (s->outbound.data) return fail(s, GIN_CONNECT_MALFORMED);
+        if (r->status == GIN_PHOENIX_REPLY_UNKNOWN) return fail(s, GIN_CONNECT_MALFORMED);
+        s->query.code = r->status == GIN_PHOENIX_REPLY_OK ? GIN_QUERY_OK : GIN_QUERY_REMOTE;
+        s->query.outcome = r->status == GIN_PHOENIX_REPLY_OK ? GIN_QUERY_ACCEPTED : GIN_QUERY_REMOTE_FAILURE;
+    }
     if (!strcmp(f->event, "phx_reply")) return GIN_CONNECT_OK;
     for (i = 0; i < s->count; i++) {
         struct topic *t = &s->topics[i];
         if (strcmp(t->text, f->topic) || !t->status.join_ref ||
             (f->join_ref && strcmp(t->ref, f->join_ref))) continue;
         if (!strcmp(f->event, "phx_error") || !strcmp(f->event, "phx_close")) return fail(s, GIN_CONNECT_CLOSED);
-        if (t->status.state == GIN_CONNECT_TOPIC_JOINED && s->callback)
-            s->callback(s->user, frame, s->result.socket_epoch);
+        if (t->status.state == GIN_CONNECT_TOPIC_JOINED && s->callback) {
+            s->in_callback = 1; s->callback(s->user, frame, s->result.socket_epoch); s->in_callback = 0;
+        }
         break;
     }
     return GIN_CONNECT_OK;
@@ -320,7 +405,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
     size_t bytes = 0;
     int polled = 0;
     struct timespec end;
-    if (!s || max_wait_ms > GIN_CONNECT_SERVICE_MAX_MS) return GIN_CONNECT_INVALID;
+    if (!s || s->in_callback || max_wait_ms > GIN_CONNECT_SERVICE_MAX_MS) return GIN_CONNECT_INVALID;
     if (s->state == GIN_CONNECT_IDLE || s->state == GIN_CONNECT_CONNECTING) return GIN_CONNECT_INVALID;
     if (s->state != GIN_CONNECT_JOINING && s->state != GIN_CONNECT_READY) return s->result.code;
     if (!deadline(&end, (long)max_wait_ms)) return fail(s, GIN_CONNECT_TRANSPORT);
@@ -330,11 +415,13 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
         int progress = 0;
         CURLcode c;
         const struct curl_ws_frame *meta = NULL;
-        if (s->state == GIN_CONNECT_JOINING && !remaining(&s->deadline)) return fail(s, GIN_CONNECT_TIMEOUT);
+        if ((s->state == GIN_CONNECT_JOINING && !remaining(&s->deadline)) ||
+            (s->query.outcome == GIN_QUERY_PENDING && !remaining(&s->query_deadline))) return fail(s, GIN_CONNECT_TIMEOUT);
         if (s->outbound.data) {
             size_t left = s->outbound.length - s->offset;
             c = curl_ws_send(s->curl, s->outbound.data + s->offset, left, &n, 0, CURLWS_TEXT);
             operations++;
+            if (s->query.outcome == GIN_QUERY_PENDING && n) s->query_written = 1;
             if (n > left) return fail(s, GIN_CONNECT_TRANSPORT);
             if (c != CURLE_OK && c != CURLE_AGAIN) return fail(s, curl_error(c));
             s->offset += n; bytes += n; progress = n != 0;
@@ -372,23 +459,26 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
             long wait = remaining(&end);
             int rc;
             if (s->state == GIN_CONNECT_JOINING && remaining(&s->deadline) < wait) wait = remaining(&s->deadline);
+            if (s->query.outcome == GIN_QUERY_PENDING && remaining(&s->query_deadline) < wait) wait = remaining(&s->query_deadline);
             p.fd = s->socket; p.events = POLLIN | (s->outbound.data ? POLLOUT : 0); p.revents = 0;
             polled = 1;
             do {
                 rc = poll(&p, 1, (int)wait);
                 wait = remaining(&end);
                 if (s->state == GIN_CONNECT_JOINING && remaining(&s->deadline) < wait) wait = remaining(&s->deadline);
+                if (s->query.outcome == GIN_QUERY_PENDING && remaining(&s->query_deadline) < wait) wait = remaining(&s->query_deadline);
             } while (rc < 0 && errno == EINTR && wait > 0);
             if (rc < 0 && errno != EINTR) return fail(s, GIN_CONNECT_TRANSPORT);
             if (rc <= 0) break;
             if (p.revents & POLLNVAL) return fail(s, GIN_CONNECT_TRANSPORT);
         }
     }
-    if (s->state == GIN_CONNECT_JOINING && !remaining(&s->deadline)) return fail(s, GIN_CONNECT_TIMEOUT);
+    if ((s->state == GIN_CONNECT_JOINING && !remaining(&s->deadline)) ||
+            (s->query.outcome == GIN_QUERY_PENDING && !remaining(&s->query_deadline))) return fail(s, GIN_CONNECT_TIMEOUT);
     return GIN_CONNECT_OK;
 }
 void gin_connect_close(struct gin_connect *s)
-{ if (s) { transport_close(s); s->state = GIN_CONNECT_STOPPED; s->result.code = GIN_CONNECT_CLOSED; } }
+{ if (s && !s->in_callback) { query_abort(s, GIN_QUERY_CLOSED); transport_close(s); s->state = GIN_CONNECT_STOPPED; s->result.code = GIN_CONNECT_CLOSED; } }
 void gin_connect_free(struct gin_connect *s)
 {
     if (!s) return;

@@ -1,3 +1,20 @@
+```text
+       :####:   ######   ###   ##
+   ######   ######   ###   ##
+ :##:  .#     ##     ###:  ##
+ ##:          ##     ####  ##
+ ##.          ##     ##:#: ##
+ ##           ##     ## ## ##
+ ##  ####     ##     ## ## ##
+ ##. ####     ##     ## :#:##
+ ##:   ##     ##     ##  ####
+ :##:  ##     ##     ##  :###
+  #######   ######   ##   ###
+   :####.   ######   ##   ###
+
+ —. .. -.
+```
+
 # gin
 
 A small, headless Unix frontend for [Grappa](https://github.com/vjt/grappa-irc),
@@ -129,6 +146,11 @@ and SHA-256 checksums, not signed binaries or production deployments.
 MIT licensed. Only attributed protocol documentation and its upstream license
 are vendored; no Grappa runtime source is copied or linked. Grappa is an
 independent upstream project; gin is not an official Grappa frontend.
+
+The isolated [minimal window-control APIs](docs/CONTROL.md) add a closed FIFO
+command frontend, REST JOIN/PART and one correlated WSS query-opening operation.
+Real FIFO/HTTPS/WSS fixtures exercise them; unsupported commands fail closed,
+`//` escapes literal leading slashes, and `gin run` remains local-only.
 
 The isolated [plain-send native API](docs/SEND.md) adds fresh config and stored-identity
 validation before one bounded REST POST. Real FIFO/HTTPS/WSS fixtures exercise

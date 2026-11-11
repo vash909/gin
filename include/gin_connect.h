@@ -4,6 +4,26 @@
 #include <stdint.h>
 #include "gin_protocol.h"
 #include "gin_phoenix.h"
+#include "gin_topology.h"
+
+enum gin_query_code {
+    GIN_QUERY_OK, GIN_QUERY_INVALID, GIN_QUERY_UNSUPPORTED, GIN_QUERY_BUSY,
+    GIN_QUERY_UNAVAILABLE, GIN_QUERY_LIMIT, GIN_QUERY_NOMEM, GIN_QUERY_REMOTE,
+    GIN_QUERY_MALFORMED, GIN_QUERY_TIMEOUT, GIN_QUERY_TRANSPORT, GIN_QUERY_CLOSED
+};
+enum gin_query_outcome {
+    GIN_QUERY_NONE, GIN_QUERY_PENDING, GIN_QUERY_NOT_SENT, GIN_QUERY_ACCEPTED,
+    GIN_QUERY_REMOTE_FAILURE, GIN_QUERY_UNCERTAIN
+};
+enum gin_query_mode {
+    GIN_QUERY_MODE_UNKNOWN, GIN_QUERY_MODE_PLAIN, GIN_QUERY_MODE_ENCRYPTED
+};
+struct gin_query_result {
+    enum gin_query_code code;
+    enum gin_query_outcome outcome;
+    uint64_t operation_id, socket_epoch;
+    char join_ref[21], request_ref[21];
+};
 
 #define GIN_CONNECT_TOPICS_MAX 64u
 #define GIN_CONNECT_SERVICE_MAX_MS 1000u
@@ -121,4 +141,25 @@ size_t gin_connect_topic_count(const struct gin_connect *session);
 const struct gin_connect_topic_status *gin_connect_topic_at(
     const struct gin_connect *session, size_t index);
 const char *gin_connect_error(enum gin_connect_code code);
+
+/* Narrow user-root operation, not a subscription, message or generic RPC.
+ * Requires READY and independent config/root protocol floors >=4. PLAIN is an
+ * explicit owner assertion, never inferred from nick or inventory. Resolve an
+ * exact slug from the borrowed topology; copy the encoded frame before return.
+ * timeout_ms is 1..60000, starts at enqueue. operation_id must be nonzero.
+ * One operation including its terminal receipt occupies the slot until take.
+ * Local rejection leaves the slot and reference generator unchanged. No replay.
+ * ACK means accepted, not inventory/membership/delivery. Error may have effects.
+ * Close/failure preserves NOT_SENT if no bytes written, otherwise UNCERTAIN;
+ * an unconsumed receipt prevents start. Submit/take reject callback reentry.
+ */
+enum gin_query_code gin_connect_open_query(struct gin_connect *session,
+    const struct gin_topology *topology, const char *network_slug,
+    const char *nick, const char *chantypes, enum gin_query_mode mode,
+    uint64_t operation_id, unsigned timeout_ms);
+/* Owned value copy, including PENDING; NULL session yields NONE. */
+struct gin_query_result gin_connect_query_result(const struct gin_connect *session);
+/* 1 copies/clears terminal receipt, 0 pending/none, -1 invalid/reentrant.
+ * Non-success leaves out untouched; inputs/output must be disjoint. */
+int gin_connect_query_take(struct gin_connect *session, struct gin_query_result *out);
 #endif

@@ -10,6 +10,11 @@ gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 gin run   [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 ```
 
+Without arguments, `gin` prints the project banner and ` —. .. -. ` on standard
+output, retains its missing-arguments diagnostic on standard error and exits 2.
+It does not read configuration or create files. `--help`, `--version` and other
+invalid invocations do not include the banner.
+
 `init` creates/reuses the private local projection described in [gin(1)](../man/gin.1).
 The original all-flags invocation remains supported:
 `gin init -d ./chat -n azzurra -c '#grappa'`.

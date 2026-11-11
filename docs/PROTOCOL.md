@@ -339,3 +339,12 @@ model. None of this is provided by the filesystem scaffold.[3]
 See [SEND.md](SEND.md) for the pinned plain REST action, local request identity,
 last-fragment-only 201 ID, no-persist 202 and uncertain/partial-side-effect
 semantics. There is no Phoenix send RPC or recipient-delivery acknowledgement.
+
+## Isolated minimal controls
+
+See [CONTROL.md](CONTROL.md) for the closed command grammar, exact REST JOIN/PART
+202 acceptance, and typed `open_query_window` WSS request/reply identity. Its
+query-operation ACK is separate from subscription ACKs and full query snapshots.
+The conservative effective server floor is 4, not the pinned current version 63;
+fixture results do not qualify historical or live server versions. No generic
+server command, inferred membership, replay or connected CLI is introduced.

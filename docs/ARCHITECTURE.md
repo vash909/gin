@@ -297,6 +297,16 @@ silently follow upstream main.
 This independent repository must do the work that an in-tree build would
 otherwise help expose.[2]
 
+## Isolated window controls
+
+The [minimal control APIs](CONTROL.md) add a closed length-aware record parser,
+REST JOIN/PART and a single correlated query-open operation on the authenticated
+root WSS topic. The owner retains explicit destination/plaintext policy, numeric
+network mapping and all lifecycle ownership. Acceptance never means observed
+membership or query-inventory replacement. Real FIFO/HTTPS/WSS fixtures compose
+these modules outside callbacks; connected CLI/runtime scheduling remains future
+work. No arbitrary IRC, generic RPC or shell execution is exposed.
+
 ## Sources
 
 [1] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/docs/CLIENT_PROTOCOL.md

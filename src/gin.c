@@ -8,6 +8,24 @@
 #include <unistd.h>
 
 static void
+banner(void)
+{
+    puts("       :####:   ######   ###   ##\n"
+         "   ######   ######   ###   ##\n"
+         " :##:  .#     ##     ###:  ##\n"
+         " ##:          ##     ####  ##\n"
+         " ##.          ##     ##:#: ##\n"
+         " ##           ##     ## ## ##\n"
+         " ##  ####     ##     ## ## ##\n"
+         " ##. ####     ##     ## :#:##\n"
+         " ##:   ##     ##     ##  ####\n"
+         " :##:  ##     ##     ##  :###\n"
+         "  #######   ######   ##   ###\n"
+         "   :####.   ######   ##   ###\n"
+         "\n \342\200\224. .. -. ");
+}
+
+static void
 usage(void)
 {
     puts("Usage: gin --help | --version\n"
@@ -159,6 +177,8 @@ main(int argc, char **argv)
         return 0;
     }
 invalid:
+    if (argc == 1)
+        banner();
     fputs("gin: invalid arguments; use --help\n", stderr);
     return 2;
 }
