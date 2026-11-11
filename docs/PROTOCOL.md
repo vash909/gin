@@ -333,3 +333,9 @@ model. None of this is provided by the filesystem scaffold.[3]
 [20] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/auth_controller.ex
 [21] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/session/wire.ex
 [22] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/frontends/shottino/wire.c
+
+## Isolated plain send
+
+See [SEND.md](SEND.md) for the pinned plain REST action, local request identity,
+last-fragment-only 201 ID, no-persist 202 and uncertain/partial-side-effect
+semantics. There is no Phoenix send RPC or recipient-delivery acknowledgement.

@@ -30,6 +30,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select independent Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install REST/TLS development dependency
         run: |
           if [ "${{ runner.os }}" = Linux ]; then
@@ -67,6 +72,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select independent Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install developer tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends musl-tools bmake cmake curl xz-utils bzip2 libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Build pinned musl TLS dependencies
@@ -118,6 +128,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select independent Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          test -f /etc/apt/apt-mirrors.txt
+          printf '%s\n' 'https://mirrors.edge.kernel.org/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt
       - name: Install analysis tools
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
       - name: Build native WebSocket curl
@@ -155,7 +170,8 @@ jobs:
           GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_connect.py
           GIN_RENDER_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_render.py
           sudo env TMPDIR="$PWD/.build/root-tests" .build/test_render_output
-          for unit in test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+          GIN_SEND_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_send.py
+          for unit in test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
             valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all ".build/$unit"
           done
           valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_topology

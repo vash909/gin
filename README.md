@@ -130,6 +130,11 @@ MIT licensed. Only attributed protocol documentation and its upstream license
 are vendored; no Grappa runtime source is copied or linked. Grappa is an
 independent upstream project; gin is not an official Grappa frontend.
 
+The isolated [plain-send native API](docs/SEND.md) adds fresh config and stored-identity
+validation before one bounded REST POST. Real FIFO/HTTPS/WSS fixtures exercise
+composition outside callbacks; `gin run` remains local-only, with no send queue,
+retry or local echo.
+
 The isolated [incoming-event renderer and append API](docs/RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
 loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa

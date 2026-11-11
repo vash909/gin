@@ -218,3 +218,8 @@ The isolated [incoming-event renderer and append API](RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
 loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
 qualification is claimed.
+
+Plain-send native tests are part of `make check`: `tests/test_send.py` composes
+a real FIFO, HTTPS and WSS receive path outside callbacks. `GIN_SEND_PREFIX`
+selects an instrumentation wrapper and `GIN_SEND_DRIVER` a private driver.
+See [SEND.md](SEND.md) for limits and scope; fixtures are not live qualification.
