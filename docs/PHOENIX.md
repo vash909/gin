@@ -176,6 +176,6 @@ Coverage includes golden envelopes, exact limits/+1, depth, ignored additions,
 UTF-8/NUL/duplicates, nullable identities, all two-chunk splits and one-byte feeds,
 explicit-final dispatch, reset/recovery, invalid local argument preservation and
 limit/OOM drop-through-boundary. All four units are included in normal platform,
-musl, NDEBUG, sanitizer and Valgrind gates. Required native macOS/FreeBSD CI and
+musl, NDEBUG, sanitizer and Valgrind gates. Required native FreeBSD CI and
 independent review remain necessary; Linux fixture success is not live Grappa
 qualification or evidence that roadmap steps 12–20 are implemented.

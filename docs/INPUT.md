@@ -125,5 +125,5 @@ unsafe objects/ancestors. All are in `make check`, hence compiler, sanitizer,
 BSD make and platform paths. Privileged foreign-owner coverage is added to the
 existing isolated CI root-test directory; ordinary local runs skip it. EINTR
 is returned explicitly but not deterministically induced on a nonblocking FIFO
-in these integration tests. Actual macOS/FreeBSD CI is still required; local
+in these integration tests. Actual FreeBSD CI is still required; local
 Linux execution is not evidence those platforms passed.

@@ -122,7 +122,7 @@ scaffold is a starting point, not completion of the operational milestones.
     local protocol fixtures. It does not yet mean real Grappa compatibility,
     implemented E2EE, recipient delivery or a release-ready beta.
 19. **Qualify portability and interoperability.** After all of 18, exercise the
-    operational executable on Linux glibc/musl, macOS and FreeBSD, including
+    operational executable on Linux glibc/musl and FreeBSD, including
     hostile filesystem, sanitizers and memory/leak checks. Retain local
     REST/Phoenix integration fixtures and add opt-in live Grappa smoke tests.
     Before live access, require explicit owner authorization of the endpoint,

@@ -2,9 +2,6 @@
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
 #endif
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE 1
-#endif
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -50,7 +47,7 @@ int main(void)
     if (base == NULL) base = ".build";
     n = snprintf(temp, sizeof(temp), "%s/gin-output.XXXXXX", base);
     assert(n > 0 && (size_t)n < sizeof(temp) && mkdtemp(temp) != NULL);
-    /* Normal fixture paths may inherit a symlinked TMPDIR (Darwin /var).
+    /* Normal fixture paths may inherit a symlinked TMPDIR.
      * Resolve only our private temporary directory, not hostile test inputs. */
     resolved = realpath(temp, NULL);
     assert(resolved != NULL);

@@ -1,7 +1,3 @@
-/* Darwin hides O_NOFOLLOW under strict POSIX selection. */
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE 1
-#endif
 #ifdef NDEBUG
 #undef NDEBUG
 #endif

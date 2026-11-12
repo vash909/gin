@@ -166,6 +166,7 @@ check: all .build/test_liveness_backoff .build/test_connect_liveness .build/live
 	.build/test_http_bounds
 	.build/test_naming
 	.build/test_input
+	$(PYTHON) tests/test_build_prefix.py
 	$(PYTHON) tests/test_cli.py
 	$(PYTHON) tests/test_locking.py
 	$(PYTHON) tests/test_input.py

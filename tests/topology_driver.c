@@ -1,7 +1,4 @@
 /* Native TLS fixture driver; secrets are accepted only from a private file. */
-#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
-#define _DARWIN_C_SOURCE 1
-#endif
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
