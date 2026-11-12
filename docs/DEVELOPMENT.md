@@ -43,11 +43,9 @@ Set environment `CURL_CONFIG` to select the host `curl-config` checked by
 it defaults to `curl-config`. Ordinary `make` still takes an explicit
 command-line `CURL_CONFIG=`. Use `CURL_CONFIG_MUSL` only for the genuine-musl
 gate in `scripts/check.sh`. The pinned musl recipe in
-[HTTP.md](HTTP.md) is a Linux developer toolchain recipe, not a macOS/BSD
+[HTTP.md](HTTP.md) is a Linux developer toolchain recipe, not a FreeBSD
 requirement.
 
-On macOS use the Command Line Tools, Python 3, Homebrew curl, Jansson, pkgconf and OpenSSL;
-select it with `make CURL_CONFIG="$(brew --prefix curl)/bin/curl-config" check`.
 On FreeBSD use
 the base C compiler/make and packaged Python 3, curl, Jansson, pkgconf and OpenSSL. The full Linux development gate uses
 Linux-specific developer packages, but the application itself does not.
@@ -158,7 +156,7 @@ fault flags or replacement global Jansson allocator.
 musl, BSD make and sanitizer lanes, adds an explicit `-DNDEBUG` lane, and runs
 pure/lookup/fetch tests under Valgrind. `GIN_TOPOLOGY_DRIVER` selects a private
 fetch driver; `GIN_TOPOLOGY_PREFIX` instruments fixture requests. None of this
-qualifies a live Grappa deployment. Linux, macOS and FreeBSD CI remain required.
+qualifies a live Grappa deployment. Linux, FreeBSD CI remain required.
 
 ## Install without root for inspection
 
@@ -214,7 +212,7 @@ approval is required for a single-maintainer repository. Never bypass checks.
 
 CI runs:
 
-- Linux GCC/Clang and macOS Clang builds/tests and staged install/uninstall.
+- Linux GCC/Clang builds/tests and staged install/uninstall.
 - FreeBSD base compiler/make tests in a pinned VM action.
 - musl and BSD make compatibility tests.
 - ShellCheck, cppcheck, documentation checks, Valgrind and ASan/UBSan on Linux.
@@ -242,8 +240,7 @@ the copied files without a network connection:
 (cd docs/upstream/grappa/87daa4cca9b41fbd6c5f93cb40d6848193f425f9 && sha256sum -c SHA256SUMS)
 ```
 
-On macOS, use `shasum -a 256 -c SHA256SUMS` in the snapshot directory. Checksums
-verify file bytes, not upstream authenticity or runtime compatibility.
+Checksums verify file bytes, not upstream authenticity or runtime compatibility.
 Documentation-only changes need provenance, license, checksum and link review,
 not a local application test run. Existing required PR CI still runs normally.
 

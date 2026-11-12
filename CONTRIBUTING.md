@@ -9,7 +9,7 @@ comments, help/errors, documentation, issues, commits and pull requests.
 3. Run `sh scripts/check.sh` locally for implementation changes. For
    documentation-only changes, review links, provenance, attribution and checksums
    as applicable; no application test run is needed. Existing required CI still
-   applies. A local Linux pass is not a FreeBSD or macOS pass.
+   applies. A local Linux pass is not a FreeBSD pass.
 4. Review the staged diff for correctness, secrets, portability and scope.
 5. Open a focused PR with test evidence, limitations and protocol references.
 6. Merge only when the required `gate` check passes on the current PR revision.

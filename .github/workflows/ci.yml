@@ -24,24 +24,15 @@ jobs:
             cc: gcc
           - os: ubuntu-24.04
             cc: clang
-          - os: macos-15
-            cc: clang
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install REST/TLS development dependency
         run: |
-          if [ "${{ runner.os }}" = Linux ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libjansson-dev pkg-config openssl
-          else
-            brew install curl jansson pkgconf openssl@3
-            echo "CURL_CONFIG=$(brew --prefix curl)/bin/curl-config" >> "$GITHUB_ENV"
-            echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
-          fi
-      - name: Build native WebSocket curl on Linux
-        if: runner.os == 'Linux'
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev libjansson-dev pkg-config openssl
+      - name: Build native WebSocket curl
         env:
           TMPDIR: ${{ runner.temp }}
           GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl

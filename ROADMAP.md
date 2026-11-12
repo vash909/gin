@@ -58,20 +58,86 @@ scaffold is a starting point, not completion of the operational milestones.
 17. **Implement history and gap recovery.** Use documented cursors and history
     windows, preserving ordering and de-duplicating only with server identity.
     Acceptance: restart/gap fixtures and clear limits on delivery guarantees.
-18. **Enforce the E2EE boundary.** Detect encrypted queries/history and report
-    unsupported encryption without outputting ciphertext as plaintext, sending
-    plaintext fallback, or accepting encrypted content as ordinary chat.
-    Acceptance: negative fixtures and explicit user-visible diagnostics.
-19. **Qualify portability and interoperability.** Exercise Linux glibc/musl,
-    macOS and FreeBSD; add hostile filesystem, sanitizers, memory/leak checks,
-    local REST/Phoenix integration fixtures and opt-in live Grappa smoke tests.
-    Acceptance: recorded versioned evidence; simulations are not live-server
-    compatibility claims. No public Grappa credentials in CI.
-20. **Cut `0.1.0-beta.1`.** Freeze the supported subset, complete examples and
-    upgrade/troubleshooting notes, audit dependencies/licenses, and publish
-    reproducible source archives, checksums and qualification results through
-    the PR/CI gate. Acceptance: fresh-machine build/install/uninstall and
-    end-to-end shell exchange against a declared Grappa revision.
+18. **Integrate the operational client and enforce the E2EE boundary.** After
+    the component milestones through 17 land, wire their native APIs into the
+    installed production CLI/runtime, not another test-only driver. Deliver the
+    four sequential sub-milestones below through focused PRs. Each requires
+    tests of the actual executable against local verified HTTPS/WSS fixtures,
+    documentation and passing required CI; standalone API tests are not enough.
+    Keep C99/POSIX, one foreground owner, bounded storage and one held root lock.
+    Do not start live-server qualification until all four are complete.
+
+    - **18.1 — Operational startup, credentials and session ownership.** Define
+      and implement the connected CLI/configuration contract, endpoint and
+      private credential-store selection using the existing authentication,
+      protocol discovery, topology and connection APIs. Keep secrets out of
+      argv, ordinary settings, URLs and diagnostics. Preserve read-only `check`
+      and safe local initialization; document any invocation migration. One
+      owner coordinates subscriptions, descriptor lifetimes, deadlines and
+      orderly shutdown. Establish TLS, origin/UUID binding and explicit route/
+      plaintext-policy checks before enabling ordinary chat operations.
+      Acceptance: launch the real executable against the local server, observe
+      correlated READY, reject invalid credentials/TLS/protocol/mode, and stop
+      cleanly without leaking descriptors, credentials or the root lock.
+
+    - **18.2 — Live reception and filesystem projection.** Connect discovered
+      networks and known channel/query windows to existing safe naming, output
+      and rendering APIs. Copy borrowed live events into a count/byte-bounded
+      owner queue; append only outside callbacks through the existing held root.
+      Preserve prior logs, identity routing and escaped timestamps/text. Carry
+      the E2EE boundary through incoming events and history: unknown/encrypted
+      modes and reserved encrypted content produce explicit unsupported
+      diagnostics, never ciphertext as ordinary chat or plaintext fallback.
+      Acceptance: the real executable receives channel and DM events into the
+      correct `out` files, with exact escaped bytes, unchanged existing prefixes,
+      negative encryption/routing fixtures and independently tested queue caps.
+
+    - **18.3 — FIFO sending and minimal window controls.** Wire the existing
+      bounded FIFO reader, closed command grammar, plain-send and typed control
+      APIs into that same connected process. Support the declared literal send,
+      JOIN/PART and query-opening subset only; retain stable owner routing,
+      correlated outcomes and explicit pending/failed/uncertain states. Apply
+      encryption/mode checks before outgoing work, with no plaintext fallback.
+      No raw IRC, shell passthrough, automatic resend or local echo presented as
+      recipient delivery. Acceptance: write to real `in` FIFOs while the same
+      process continues receiving; the local server observes exact authorized
+      operations and the CLI exposes rejection, uncertainty and unsupported
+      encryption without leaking payloads into diagnostics or replaying input.
+
+    - **18.4 — Integrated liveness, recovery and restart.** Drive existing
+      heartbeat/backoff/session-expiry and history planners from the runtime.
+      Schedule bounded REST work outside callbacks with an explicit WSS-service
+      and deadline policy; do not silently starve heartbeats or pending replies.
+      Resubscribe and reconcile current topology/source epochs after reconnect,
+      merge history/live overlap by persisted identity and keep fetch cursors
+      separate from successful output progress and user read cursors. Define
+      restart-anchor ownership and explicit unknown-baseline behavior; retain
+      partial-append/crash ambiguity rather than promising durable exactly-once
+      output. Acceptance: actual executable/process restart and network-loss
+      fixtures preserve logs/locking, reject stale/conflicting/encrypted input,
+      bound CPU/queues/retries and never replay outgoing operations. Demonstrate
+      the installed CLI's complete FIFO-send/log-receive shell workflow locally.
+
+    Completion of 18 means a basic connected plaintext client works against the
+    local protocol fixtures. It does not yet mean real Grappa compatibility,
+    implemented E2EE, recipient delivery or a release-ready beta.
+19. **Qualify portability and interoperability.** After all of 18, exercise the
+    operational executable on Linux glibc/musl and FreeBSD, including
+    hostile filesystem, sanitizers and memory/leak checks. Retain local
+    REST/Phoenix integration fixtures and add opt-in live Grappa smoke tests.
+    Before live access, require explicit owner authorization of the endpoint,
+    declared server revision, dedicated account and allowed read/write targets
+    and operations; planning this milestone does not authorize server writes.
+    Acceptance: recorded versioned evidence for real CLI authentication,
+    subscription, FIFO send/log receive, controls and reconnect/history behavior
+    within the supported plaintext subset. Simulations are not live-server
+    compatibility claims. No real Grappa credentials or live-server traffic in CI.
+20. **Cut `0.1.0-beta.1`.** Only after 18 and 19 pass, freeze the supported
+    subset, complete examples and upgrade/troubleshooting notes, audit
+    dependencies/licenses, and publish reproducible source archives, checksums
+    and qualification results through the PR/CI gate. Acceptance: fresh-machine
+    build/install/uninstall and end-to-end shell exchange using the installed
+    executable against the declared, explicitly authorized Grappa revision.
 
 ## After the first beta: Grappa E2EE
 

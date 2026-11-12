@@ -98,5 +98,5 @@ interleaved ping, root/child refusal, unknown status, binary/close/timeout,
 same-process preflight/reconnect with increasing refs. Private injected I/O
 units supplement native tests with short/AGAIN sends and work/poll bounds.
 `GIN_CONNECT_PREFIX` supports Valgrind; `GIN_CONNECT_DRIVER` selects a private
-native build. No credentials or live endpoint are used. Real macOS/FreeBSD CI,
+native build. No credentials or live endpoint are used. Real FreeBSD CI,
 independent review and the final integrated gate remain required.

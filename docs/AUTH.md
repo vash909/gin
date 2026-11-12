@@ -119,4 +119,4 @@ release archive, SHA-256
 `f9aa4b3ec8496fee69db94f06f3d76fd4a26b012ee9bf1e917078c2cd2841881`,
 using musl-gcc, static libraries and at most two compiler jobs. Platform CI,
 sanitizers and real-TLS Valgrind are required gates; a local Linux run is not
-macOS/FreeBSD or live Grappa qualification.
+FreeBSD or live Grappa qualification.

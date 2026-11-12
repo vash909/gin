@@ -19,7 +19,8 @@
 
 A small, headless Unix frontend for [Grappa](https://github.com/vjt/grappa-irc),
 inspired by [ii](https://tools.suckless.org/ii/). Portable C99 and POSIX.1-2008;
-ordinary files and named pipes instead of another chat UI.
+ordinary files and named pipes instead of another chat UI. Supported target
+platforms are Linux (glibc/musl) and FreeBSD.
 
 **Status: development scaffold, not a working Grappa client or a beta.**
 The executable initializes a private filesystem tree and validates explicit
@@ -138,7 +139,7 @@ path to a first beta; post-beta E2EE is tracked separately.
 - [Security policy](SECURITY.md)
 - [Manual](man/gin.1)
 
-CI exercises Linux GCC/Clang, macOS, FreeBSD, musl, BSD make, sanitizers,
+CI exercises Linux GCC/Clang, FreeBSD, musl, BSD make, sanitizers,
 static analysis and staged installation. Main is PR-only with a required CI
 gate, including for administrators. Passing main builds produce source archives
 and SHA-256 checksums, not signed binaries or production deployments.

@@ -127,4 +127,4 @@ POSIX lock to check the CLI independently of the held-root API. Persistent
 contents/inodes, partial states, hostile lock objects and invalid settings are
 covered. Foreign-owner tests are skipped without privilege. All tests run in
 `make check`, including compiler, sanitizer and platform paths; local Linux
-results do not substitute for real macOS/FreeBSD CI.
+results do not substitute for real FreeBSD CI.

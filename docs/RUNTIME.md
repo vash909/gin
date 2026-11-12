@@ -100,4 +100,4 @@ real blocking fputs on a full pipe; ordinary CLI error-output tests also prove
 root reacquisition under backpressure. These are development-only linked test
 executables, not production test modes. Privileged ownership tests run
 in the existing isolated root CI lane. Linux local results do not substitute
-for real macOS and FreeBSD CI. No live-server interoperability is claimed.
+for real FreeBSD CI. No live-server interoperability is claimed.

@@ -47,9 +47,10 @@ if os.path.lexists(prefix) and not os.path.isdir(prefix):
 canonical_prefix = os.path.realpath(prefix)
 system_prefixes = {
     '/', '/usr', '/usr/local', '/bin', '/sbin', '/lib', '/lib64',
-    '/etc', '/opt', '/opt/homebrew', '/var', '/tmp',
+    '/etc', '/opt', '/var', '/tmp',
 }
-if canonical_prefix in {os.path.realpath(p) for p in system_prefixes}:
+if (canonical_prefix in {os.path.realpath(p) for p in system_prefixes}
+        or canonical_prefix.startswith('/opt/')):
     fail('GIN_CURL_PREFIX must not be a system prefix.')
 check_owned_not_group_other_writable(
     nearest_existing(canonical_prefix), 'GIN_CURL_PREFIX or its nearest existing parent')
@@ -66,9 +67,6 @@ curl -q --proto '=https' --proto-redir '=https' --fail --location --output "$arc
 expected=8dadd7d2536a314f982ad05a651b713f426bf7d02cc2c76cffb9796f2218e6c5
 if command -v sha256sum >/dev/null; then
   actual=$(sha256sum "$archive")
-  actual=${actual%% *}
-elif command -v shasum >/dev/null; then
-  actual=$(shasum -a 256 "$archive")
   actual=${actual%% *}
 else
   actual=$(sha256 -q "$archive")
