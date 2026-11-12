@@ -13,6 +13,7 @@ from typing import Any, cast, Optional
 import subprocess
 import threading
 import unittest
+from unittest.mock import patch
 import test_http
 from test_auth import IDENTITY, TOKEN
 
@@ -26,6 +27,10 @@ OK, IGNORE, INVALID, MALFORMED, LIMIT, NOMEM, ROUTE, UNSUPPORTED, CONFLICT, STAL
 
 def encode(v):
     return v if isinstance(v, bytes) else json.dumps(v).encode()
+
+
+def wrapper_arguments():
+    return shlex.split(os.environ.get("GIN_HISTORY_PREFIX", ""))
 
 
 class Server(http.server.ThreadingHTTPServer):
@@ -65,7 +70,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path not in ("/api/config", "/me") and srv.reconfigure is not None:
             srv.responses["/api/config"] = (200, encode(srv.reconfigure))
         if self.path == srv.delay:
-            srv.stopped.wait(1.0)
+            srv.stopped.wait(10.0 if wrapper_arguments() else 1.0)
         try:
             self.send_response(status)
             self.send_header("Content-Length", str(len(body) + (self.path == srv.partial)))
@@ -94,7 +99,7 @@ class HistoryTests(unittest.TestCase):
     @contextlib.contextmanager
     def fixture(self, config=CONFIG, me=IDENTITY, page=b"[]", status=200,
                 me_status=200, cert="good", reject_tls=False, reconfigure=None,
-                partial=None, delay=None, headers=None):
+                partial=None, delay=None, headers=None, tls_setup_delay=0.0):
         srv = Server(("127.0.0.1", 0), Handler)
         srv.records, srv.errors = [], []
         srv.reject_tls = reject_tls
@@ -104,7 +109,12 @@ class HistoryTests(unittest.TestCase):
         srv.partial, srv.delay, srv.headers = partial, delay, headers
         srv.reconfigure = reconfigure
         srv.stopped = threading.Event()
-        srv.socket = self.tls(cert).wrap_socket(srv.socket, server_side=True)
+        tls = self.tls(cert)
+        if tls_setup_delay:
+            def wait_for_setup(_socket, _server_name, _context):
+                srv.stopped.wait(tls_setup_delay)
+            tls.sni_callback = wait_for_setup
+        srv.socket = tls.wrap_socket(srv.socket, server_side=True)
         thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01})
         thread.start()
         try:
@@ -120,9 +130,13 @@ class HistoryTests(unittest.TestCase):
             subject_id=IDENTITY["id"], subject_name=IDENTITY["name"])))
         credential.chmod(0o600)
         binary = os.environ.get("GIN_HISTORY_DRIVER", str(ROOT / ".build/history_http_driver"))
-        prefix = shlex.split(os.environ.get("GIN_HISTORY_PREFIX", ""))
+        prefix = wrapper_arguments()
+        child_env = os.environ.copy()
+        if not prefix:
+            child_env.pop("GIN_HISTORY_PREFIX", None)
         p = subprocess.run(prefix + [binary, origin, str(self.certdir / ca),
-            str(credential), mode, str(calls)], capture_output=True, timeout=25)
+            str(credential), mode, str(calls)], capture_output=True,
+            timeout=90 if prefix else 25, env=child_env)
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
         self.assertEqual(p.stderr, b"")
         self.assertNotIn(TOKEN.encode(), p.stdout + p.stderr)
@@ -146,6 +160,26 @@ class HistoryTests(unittest.TestCase):
         with self.fixture(page=[row]) as (srv, origin):
             self.assertEqual(self.request(origin), [[OK, 0, 0, 200, 1, 1, 1]])
             self.flow(srv, ["/api/config", "/me", PATH])
+
+    def check_instrumented_tls_setup_budget(self):
+        # Exercise fixture policy even without Valgrind installed; when already
+        # instrumented retain the actual wrapper rather than replacing it.
+        prefix = os.environ.get("GIN_HISTORY_PREFIX", "") if wrapper_arguments() else "env"
+        with patch.dict(os.environ, {"GIN_HISTORY_PREFIX": prefix}):
+            with self.fixture(tls_setup_delay=1.25) as (srv, origin):
+                self.assertEqual(self.request(origin)[0][0], OK)
+                self.flow(srv, ["/api/config", "/me", PATH])
+
+    def test_instrumented_tls_setup_budget(self):
+        self.check_instrumented_tls_setup_budget()
+
+    def test_empty_prefix_uses_normal_deadlines(self):
+        for value in ("", "   "):
+            with self.subTest(prefix=value), patch.dict(os.environ, {"GIN_HISTORY_PREFIX": value}):
+                with self.fixture(delay="/api/config") as (srv, origin):
+                    self.assertEqual(self.request(origin, "deadline")[0][0], TIMEOUT)
+                    self.flow(srv, ["/api/config"])
+                self.check_instrumented_tls_setup_budget()
 
     def test_all_local_rejection_before_io(self):
         cases = {"unknown-mode": UNSUPPORTED, "encrypted": UNSUPPORTED,
@@ -240,9 +274,13 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(srv.records, [])
 
     def test_timeout_and_limit_each_phase(self):
-        for path in ("/api/config", "/me", PATH):
+        paths = ["/api/config", "/me", PATH]
+        for phase, path in enumerate(paths):
             with self.fixture(delay=path) as (srv, origin):
                 self.assertEqual(self.request(origin, "deadline")[0][0], TIMEOUT)
+                # A TLS-setup timeout at an earlier hop cannot qualify this
+                # phase's deliberately delayed HTTP response.
+                self.flow(srv, paths[:phase + 1])
             with self.fixture(headers=path) as (srv, origin):
                 self.assertEqual(self.request(origin)[0][0], LIMIT)
         with socket.socket() as reserved:

@@ -30,9 +30,12 @@ int main(int argc, char **argv)
     json_t *j;
     const char *mode;
     int i, calls;
+    const char *wrapper = getenv("GIN_HISTORY_PREFIX");
+    int instrumented = wrapper != NULL && wrapper[0] != '\0';
     assert(argc == 6);
     settings.origin = argv[1]; settings.ca_file = argv[2];
-    settings.connect_ms = 1000; settings.total_ms = 2000;
+    settings.connect_ms = instrumented ? 10000 : 1000;
+    settings.total_ms = instrumented ? 20000 : 2000;
     j = json_load_file(argv[3], JSON_REJECT_DUPLICATES, NULL);
     assert(json_is_object(j));
     field(j, "origin", credential.origin, sizeof(credential.origin));
@@ -69,7 +72,10 @@ int main(int argc, char **argv)
     if (!strcmp(mode, "bad-limit")) request.limit = 0;
     if (!strcmp(mode, "bad-anchor")) request.anchor = -1;
     if (!strcmp(mode, "bad-timeout")) settings.total_ms = 0;
-    if (!strcmp(mode, "deadline")) { settings.connect_ms = 200; settings.total_ms = 350; }
+    if (!strcmp(mode, "deadline")) {
+        settings.connect_ms = instrumented ? 5000 : 200;
+        settings.total_ms = instrumented ? 8000 : 350;
+    }
     if (!strcmp(mode, "bad-policy")) policy.client_protocol = 0;
     if (!strcmp(mode, "occupied")) {
         assert(gin_history_page_decode(&scope, &request, (const unsigned char *)"[]", 2, &occupied) == GIN_HISTORY_OK);
