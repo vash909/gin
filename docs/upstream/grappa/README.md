@@ -42,7 +42,6 @@ On Linux, from the repository root:
 (cd docs/upstream/grappa/87daa4cca9b41fbd6c5f93cb40d6848193f425f9 && sha256sum -c SHA256SUMS)
 ```
 
-On macOS, use `shasum -a 256 -c SHA256SUMS` in the same snapshot directory.
 These checks run offline and do not execute gin or require an application test
 suite. They check the two copied files, not the truth of the manifest metadata
 or runtime compatibility. Review provenance, the active pointer, protocol values

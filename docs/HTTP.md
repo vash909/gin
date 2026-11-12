@@ -126,7 +126,7 @@ musl-gcc with host glibc libcurl headers/libraries and call that musl coverage.
 
 For a genuine user-prefix musl TLS toolchain, set absolute `GIN_MUSL_PREFIX`
 and a private `TMPDIR`, then run `sh scripts/build-musl-http.sh`. This is a
-Linux developer musl toolchain recipe, not a macOS/BSD requirement. The recipe pins
+Linux developer musl toolchain recipe, not a FreeBSD requirement. The recipe pins
 curl 8.23.0, mbedTLS 3.6.7 and Jansson 2.15.1 release archives and SHA-256
 digests, builds them with musl-gcc (at most two compile jobs), and installs
 without sudo. It checks
@@ -142,7 +142,7 @@ CURL_CONFIG_MUSL="$GIN_MUSL_PREFIX/bin/curl-config" sh scripts/check.sh
 
 The full gate requires CURL_CONFIG_MUSL explicitly and fails if missing; it
 never silently skips the adapter or substitutes host glibc. CI installs curl
-development packages on Linux/macOS/FreeBSD and builds the pinned real musl
+development packages on Linux/FreeBSD and builds the pinned real musl
 TLS dependencies separately. Local HTTP/HTTPS Python-stdlib fixtures generate
 ephemeral CA/SAN certificates with OpenSSL; subprocesses and sockets have
 bounded timeouts and are cleaned up. NDEBUG does not disable C assertions.
