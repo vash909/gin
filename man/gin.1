@@ -1,6 +1,6 @@
 .TH GIN 1 "November 2026" "gin 0.1.0-dev" "User Commands"
 .SH NAME
-gin \- initialize local files or validate Grappa frontend settings
+gin \- initialize local files or own a verified Grappa startup session
 .SH SYNOPSIS
 .B gin \-\-help
 .br
@@ -30,8 +30,10 @@ gin \- initialize local files or validate Grappa frontend settings
 .B gin
 is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
 REST resources and Phoenix Channels events. It is not an IRC client.
-This version initializes local filesystem entries and validates settings.
-It makes no network connection and sends no messages.
+Local init/check/run remain unchanged. Separate connect/connect-check and
+credential-import commands provide subscription-only HTTPS/WSS startup, not
+chat reception, FIFO sending, reconnect, history, E2EE or a beta. Live Grappa
+interoperability is unqualified.
 .SH COMMANDS
 .TP
 .B \-\-help
@@ -64,6 +66,65 @@ No fork, daemon, installed service or network connection is created.
 .PP
 For each command, each CLI flag may appear at most once. CLI settings override
 file settings regardless of option order. Unknown options/operands are errors.
+.SH CONNECTED STARTUP
+.B gin connect
+[-f SESSION_FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
+[-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-E]
+.PP
+.B gin connect-check
+accepts the same grammar, but validates only safe settings and effective lexical
+values: no root/store/lock/CA/fd/server probe or mutation. Relative paths use cwd.
+.PP
+.B gin credential-import
+-d ROOT -e HTTPS_ORIGIN -s PRIVATE_BEARER_FILE [-a CA_FILE]
+explicitly enrolls a raw bearer from an owned0600 single-link regular file with
+no final symlink. Read/close the input before acquiring root; consume exactly
+1..4096 RFC6750 bytes without trimming LF/CR/NUL. Never put token bytes in argv,
+environment, ordinary settings, URL or diagnostics. This command does fresh
+anonymous config, authenticated account identity and explicit safe local save.
+An error after rename/fsync may follow publication; do not retry or claim rollback.
+.PP
+ROOT selects exactly ROOT/.gin.credentials, one exact origin/account per held
+root. Connect instead validates stored origin/UUID binding and never imports,
+rewrites or revokes credentials implicitly. There is no arbitrary store path.
+Existing local invocations never silently connect or change format.
+.PP
+The separate SESSION_FILE uses legacy safe0600, byte/line, no-final-symlink and
+duplicate/unknown/control-byte rules. Keys are root/network/target/chantypes,
+origin/mode/ca_file/connect_ms/total_ms/join_ms/startup_ms. Explicit HTTPS authority
+and mode=plain are required; no userinfo/path/query/fragment or insecure fallback.
+Plain is an owner assertion, not server encryption attestation or E2EE support.
+Origin limit is 1024 bytes, CA path4095; existing naming bounds remain.
+Timers are canonical positive decimal milliseconds: connect/total/join<=60000,
+startup<=600000, effective total>=connect. Defaults1500/3000/3000/30000;
+import uses10000/20000 per-request connect/total limits.
+.PP
+The one foreground owner does fresh config/bound-me/boot, then fresh
+config/bound-me/verified same-authority WSS and correlated required subscriptions.
+Production startup fixes C=4/R=4, independently checking C>=server minimum and
+server current>=R, not captured current63 or history floor36. A selected channel
+requires joined remote evidence; a query additionally requires current complete
+root query inventory. Missing inventory is unknown, not empty or a nick inference.
+.PP
+-R requires canonical decimal fd>=3, an already nonblocking pipe write end.
+The owner duplicates without changing inherited flags and writes only READY
+followed by LF after all required joins and route/plain checks. Full/broken pipe,
+short/zero write or exhausted bounded EINTR attempts fails and cleans up. No -R
+means no readiness announcement. No blocking stdio runs while resources are held.
+-E explicitly monitors an already nonblocking stdin pipe read end; only zero read
+stops, data fails, HUP alone is not EOF. Without -E stdin is ignored, including
+/dev/null. Neither option is a chat command/input path.
+.PP
+SIGINT/TERM stop cleanly after existing synchronous aggregate startup calls
+return; later internal requests may still occur before that return. Per-request
+and startup deadlines are not hard wall-clock bounds on files, resolver cleanup
+or scheduling. Service waits at most50ms per quantum. No immediate abort,
+heartbeat/retry, ordinary chat logs, FIFO sends, history or sustained healthy
+session lifetime is promised in this stage. Existing logs/FIFOs/store remain
+unchanged. Teardown frees session/HTTP/children before root release, restores
+caller signal policy and never unlinks the persistent lock. API status0 is not
+proof of reaching READY or recipient delivery; errors1/2 retain runtime/config
+meanings. See docs/SESSION.md for the complete contract and limits.
 .SH OPTIONS
 .TP
 .BI \-f " FILE"
@@ -240,15 +301,22 @@ options, or unknown command. Validation completes before output-tree mutation.
 CLI syntax is checked before the explicit file, then effective settings; an
 unreadable explicit file returns 1 even if effective settings would be missing.
 .SH LIMITATIONS
-Networking, authentication, sending, Phoenix wire encoding/decoding
-and end-to-end encryption are not implemented. No connect or message-sending
-command exists.
+The installed native CLI includes connect, connect-check, and credential-import
+with verified HTTPS discovery, stored-origin/account-identity checks, and
+/boot plus root-first WSS subscriptions under the connected owner; native
+Phoenix codec and authentication are implemented APIs. Chat projection, message
+sending, reconnection, history, and end-to-end encryption remain deferred.
+.B gin run
+remains local-only with unsupported sending.
 .PP
 run uses POSIX poll and an async-signal-safe self-pipe for SIGINT/SIGTERM.
 The runtime closes input/wake descriptors before releasing the root lock and
-restores previous signal dispositions and mask. Connected operation still
-needs later transport/authentication milestones.
-No Grappa protocol compatibility or delivery is claimed.
+restores previous signal dispositions and mask. Connected startup is
+subscription-only: chat/log projection, sending, automatic reconnection and
+history recovery are not wired into that command. The implemented startup
+policy declares client protocol 4 and requires server protocol 4; this is not
+a claim of all upstream features. No live Grappa revision or recipient delivery
+is qualified.
 .SH SEE ALSO
 .BR mkfifo (1),
 .BR tail (1),

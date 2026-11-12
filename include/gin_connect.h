@@ -122,6 +122,16 @@ enum gin_connect_code gin_connect_start(struct gin_connect *session);
 enum gin_connect_code gin_connect_service(struct gin_connect *session,
     unsigned max_wait_ms);
 
+/* Local point-in-time receive observation, not an atomic server cut, replay or
+ * history barrier, or a promise against future data. True only on a live attempt
+ * after the last successful service observed CURLE_AGAIN with no partial TEXT
+ * message. Work/byte-budget exhaustion alone is not drain evidence. New service
+ * (including invalid calls), I/O iterations, poll readiness, start and teardown
+ * invalidate the observation. NULL, initial, closed and failed sessions => false.
+ * Outbound completion is independent; this does not acknowledge queued writes.
+ */
+int gin_connect_receive_drained(const struct gin_connect *session);
+
 /* Explicit close is idempotent/abortive, not remote logout or IRC PART. Clear
  * active generations/pending/collector/outbound; no waiting or application replay.
  * Retain owned credential and desired plan for explicit close -> start reconnect.

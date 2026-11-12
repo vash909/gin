@@ -62,6 +62,7 @@ struct gin_connect {
     char heartbeat_ref[GIN_PHOENIX_REF_CAP];
     size_t heartbeat_length, heartbeat_offset;
     enum gin_liveness_reason failure_reason;
+    int receive_drained, text_partial;
 };
 static void wipe(void *p, size_t n)
 {
@@ -248,6 +249,7 @@ static void query_abort(struct gin_connect *s, enum gin_query_code code)
 static void transport_close(struct gin_connect *s)
 {
     size_t i;
+    s->receive_drained = s->text_partial = 0;
     if (s->curl) curl_easy_cleanup(s->curl);
     s->curl = NULL;
     {
@@ -480,6 +482,7 @@ static enum gin_connect_code queue_join(struct gin_connect *s)
 enum gin_connect_code gin_connect_start(struct gin_connect *s)
 {
     if (!s || s->in_callback || s->session_expired) return GIN_CONNECT_INVALID;
+    s->receive_drained = 0;
     if (s->configured && s->started)
         return gin_connect_retry(s) == GIN_RETRY_ATTEMPTED ? s->result.code : GIN_CONNECT_INVALID;
     if (s->configured && s->cancelled) return GIN_CONNECT_INVALID;
@@ -662,6 +665,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
     size_t bytes = 0;
     int polled = 0;
     struct timespec end;
+    if (s) s->receive_drained = 0;
     if (!s || s->in_callback || max_wait_ms > GIN_CONNECT_SERVICE_MAX_MS) return GIN_CONNECT_INVALID;
     if (s->state == GIN_CONNECT_IDLE || s->state == GIN_CONNECT_CONNECTING) return GIN_CONNECT_INVALID;
     if (s->state != GIN_CONNECT_JOINING && s->state != GIN_CONNECT_READY) return s->result.code;
@@ -673,6 +677,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
         int progress = 0;
         CURLcode c;
         const struct curl_ws_frame *meta = NULL;
+        s->receive_drained = 0;
         if (timers(s) != GIN_CONNECT_OK) return s->result.code;
         if ((s->heartbeat == GIN_HEARTBEAT_QUEUED || s->heartbeat == GIN_HEARTBEAT_WRITING) &&
             s->writer != WIRE_APPLICATION) {
@@ -714,6 +719,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
             if (flags & CURLWS_CLOSE) return fail(s, GIN_CONNECT_CLOSED);
             if (flags & CURLWS_BINARY) return fail(s, GIN_CONNECT_MALFORMED);
             if (flags & CURLWS_TEXT) {
+                s->text_partial = !final;
                 pc = gin_phoenix_stream_feed(s->stream, buffer, n, final, &frame);
                 if (pc != GIN_PHOENIX_OK && pc != GIN_PHOENIX_NEED_MORE)
                     return fail(s, pc == GIN_PHOENIX_LIMIT ? GIN_CONNECT_LIMIT : pc == GIN_PHOENIX_NOMEM ? GIN_CONNECT_NOMEM : GIN_CONNECT_MALFORMED);
@@ -725,6 +731,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
             }
         } else if (c == CURLE_GOT_NOTHING) return fail(s, GIN_CONNECT_CLOSED);
         else if (c != CURLE_AGAIN) return fail(s, curl_error(c));
+        else s->receive_drained = !s->text_partial;
         if (progress) continue;
         if (polled || !max_wait_ms || !remaining(s, &end)) break;
         {
@@ -740,6 +747,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
             } while (rc < 0 && errno == EINTR && wait > 0);
             if (rc < 0 && errno != EINTR) return local_transport_failure(s);
             if (rc <= 0) break;
+            s->receive_drained = 0;
             if (p.revents & POLLNVAL) return local_transport_failure(s);
         }
     }
@@ -761,6 +769,9 @@ void gin_connect_free(struct gin_connect *s)
 }
 enum gin_connect_state gin_connect_get_state(const struct gin_connect *s)
 { return s ? s->state : GIN_CONNECT_STOPPED; }
+int gin_connect_receive_drained(const struct gin_connect *s)
+{ return s && (s->state == GIN_CONNECT_JOINING || s->state == GIN_CONNECT_READY) &&
+    s->result.socket_epoch && s->receive_drained && !s->text_partial; }
 struct gin_connect_result gin_connect_last_result(const struct gin_connect *s)
 { struct gin_connect_result r = {0}; if (s) return s->result; r.code = GIN_CONNECT_INVALID; return r; }
 size_t gin_connect_topic_count(const struct gin_connect *s) { return s ? s->count : 0; }

@@ -3,6 +3,8 @@
 `include/gin_credential.h` and `src/credential.c` implement local storage for
 one account-user credential per held gin root. This module does not log in,
 validate a session remotely, revoke a server token, or integrate networking.
+The separate [production startup owner](SESSION.md) selects this fixed store
+through ROOT and explicitly composes enrollment and bound session validation.
 Authentication must additionally validate the HTTPS origin with libcurl's URL
 parser before transmitting credentials.
 

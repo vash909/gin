@@ -1,4 +1,11 @@
-# Foreground local runtime
+# Foreground runtimes
+
+The separate production [startup/session owner](SESSION.md), in
+`src/session.c` / `include/gin_session.h`, backs `connect`, `connect-check` and
+`credential-import`. It owns one root and verified subscriptions, not chat
+projection or sending, and does not invoke the local runtime callback below.
+
+## Unchanged local runtime
 
 `gin run [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]`
 uses the same explicit configuration, precedence and lexical validation as
@@ -9,7 +16,7 @@ It remains a foreground single process: no fork, daemon, service or network.
 
 Startup writes a static **starting local input; transport unavailable; sending
 unsupported** diagnostic to stderr before acquiring any runtime resources. It
-announces intent, not readiness: initialization can still fail. The CLI has no
+announces intent, not readiness: initialization can still fail. Local `run` has no
 readiness-output protocol; a bounded successful nonblocking writer open of the
 actual FIFO establishes a local reader (not transport availability). Stdio can
 block before acquisition or after cleanup, never in a callback or while owning
@@ -32,7 +39,7 @@ write within both that bound and the separate local payload limit. No commands,
 shell evaluation, REST, TLS, authentication, Phoenix, history or sending exist.
 This does not establish Grappa protocol compatibility. The separate
 [synchronous REST/TLS API](HTTP.md) is not called from this runtime or its
-callbacks; network integration remains future work.
+callbacks. The separate connected owner is documented in [SESSION.md](SESSION.md).
 
 ## API, ownership and scheduling
 

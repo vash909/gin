@@ -2,15 +2,16 @@
 
 ## Status and pinned reference
 
-This is an implementation guide for **planned transport**, not a claim that
-gin can connect. The repository provides local CLI/filesystem
-initialization plus a bounded local input C API and local-only foreground
-runtime. An isolated [bounded HTTP/TLS GET API](HTTP.md) now exists, but no
-CLI connection, message sender or E2EE. The isolated
+This is a pinned implementation guide, not live Grappa qualification. The
+repository provides local CLI/filesystem initialization, local-only `run` and a
+separate [production startup owner](SESSION.md) that enrolls private credentials
+and establishes verified correlated subscriptions. It does not yet project chat,
+send from FIFOs, reconnect, recover history or implement E2EE. The
+[bounded HTTP/TLS API](HTTP.md) remains synchronous outside callbacks. The isolated
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights.
 The isolated [connection API](CONNECT.md) now implements verified WSS and
 root-first subscriptions. The isolated [renderer and append API](RENDER.md)
-projects source-derived incoming records; CLI/runtime integration remains future work.
+projects source-derived incoming records; connected chat projection remains 18.2.
 Separate [account authentication APIs](AUTH.md) implement bounded JSON and
 private credentials outside runtime callbacks. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).
@@ -65,11 +66,11 @@ The examples are small constructed wire illustrations, not captured sessions.
    standalone resource shapes. Source: `GrappaWeb.MeController.show/2`,
    `GrappaWeb.BootJSON.index/1`, `Grappa.Protocol`.[19][10][2]
 
-Gin's intended minimal transport requires `/boot`, so its **proposed baseline
-server floor is 4**, with per-feature gates for anything newer. This is a design
-floor, not a compatibility claim. The actual client declaration must describe
-the subset implemented and tested when transport lands; the scaffold declares
-nothing. Track three separate values:
+Gin's production startup owner requires `/boot` and fixes **C=4 and R=4** for
+its implemented startup subset, with per-feature gates required for later work.
+This is not a claim of all protocol4 features or live interoperability; it does
+not copy captured current63 or later history floor36. Standalone native APIs
+still require explicit caller policy. Track three separate values:
 
 - Server current protocol `S`, from discovery/join reply.
 - Server minimum accepted client declaration `M`.
@@ -261,7 +262,8 @@ precede dependent subscriptions. Stale references cannot authorize a new push.
 Revoked credentials, recognized session severance, scope refusal and an unmet
 protocol floor are terminal. Unconsumed query receipts block reconnect, and no
 uncertain operation is silently replayed: HTTP failure can follow server effects.
-The CLI remains local-only. The upstream reference's `ws_try_reconnect()` also
+The production connected owner does not enable automatic retry. The upstream
+reference's `ws_try_reconnect()` also
 refreshes state, and `getSocket()` rebuilds on bearer rotation; gin does not claim
 those broader recovery capabilities here.[16][9]
 
@@ -298,7 +300,8 @@ page means visible drain at that request, not complete original history.
 Read cursors, boot heads and ID jumps do not prove processed/delivered continuity;
 there is no retention watermark, server-generation token or atomic REST/WSS cut.
 Caller-owned output/checkpoint policy remains separate, and append-only files
-cannot reorder previously written logs. The CLI remains local-only.
+cannot reorder previously written logs. The subscription-only connected owner
+does not yet schedule history recovery.
 
 ## Encryption boundary: fail closed
 

@@ -22,10 +22,32 @@ HISTORY_HEADERS = include/gin_history.h src/history_values.h src/history_evidenc
 HISTORY_PAGE_SUPPORT = src/naming.c src/connect_topic.c src/phoenix.c src/http.c
 HISTORY_TARGETS = .build/test_history_page .build/test_history_owned .build/test_history_live .build/test_history_recovery .build/test_history_path .build/test_history_evidence .build/test_render_plain .build/history_http_driver .build/history_driver
 
+CONNECT_HEADERS = include/gin_connect.h include/gin_liveness.h src/liveness_values.h include/gin_command.h include/gin_topology.h src/topology_internal.h include/gin_naming.h src/connect_values.h
+CONNECT_QUERY_SOURCES = src/command.c src/topology.c src/topology_lookup.c
+CONNECT_SUPPORT_SOURCES = src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c src/http.c src/auth.c src/credential.c src/protocol.c src/protocol_parse.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c $(CONNECT_QUERY_SOURCES) src/naming.c
+CONNECT_SOURCES = src/connect.c $(CONNECT_SUPPORT_SOURCES)
 
-.build/gin: $(HISTORY_SOURCES) $(HISTORY_HEADERS) include/gin_command.h include/gin_control.h src/command.c src/control.c include/gin_send.h src/send_values.h include/gin_render.h src/render_values.h src/gin.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c include/gin_connect.h include/gin_liveness.h src/liveness_values.h src/connect_values.h src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+SESSION_SOURCES = src/session.c src/session_config.c
+SESSION_HEADERS = include/gin_session.h include/gin_config.h include/gin_http.h include/gin_fs.h include/gin_credential.h include/gin_auth.h include/gin_protocol.h include/gin_topology.h include/gin_connect.h include/gin_phoenix.h
+SESSION_OWNER_SUPPORT = src/session_config.c src/fs.c src/topology_fetch.c $(CONNECT_SOURCES)
+
+.build/test_session_owner: tests/test_session_owner.c $(SESSION_SOURCES) $(SESSION_OWNER_SUPPORT) $(SESSION_HEADERS) $(CONNECT_HEADERS)
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c $(HISTORY_SOURCES) src/command.c src/control.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_session_owner.c src/session.c $(SESSION_OWNER_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+# The white-box fixture includes the production owner; never link it twice.
+.build/test_session_owner_whitebox: tests/test_session_owner.c $(SESSION_SOURCES) $(SESSION_OWNER_SUPPORT) $(SESSION_HEADERS) $(CONNECT_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -DOWNER_WHITEBOX -o $@ tests/test_session_owner.c $(SESSION_OWNER_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_session_config: tests/test_session_config.c src/session_config.c src/fs.c src/naming.c src/http.c $(SESSION_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(LDFLAGS) -o $@ tests/test_session_config.c src/session_config.c src/fs.c src/naming.c src/http.c $(CURL_LIBS) $(LDLIBS)
+
+
+.build/gin: $(SESSION_SOURCES) $(SESSION_HEADERS) $(HISTORY_SOURCES) $(HISTORY_HEADERS) include/gin_command.h include/gin_control.h src/command.c src/control.c include/gin_send.h src/send_values.h include/gin_render.h src/render_values.h src/gin.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c include/gin_connect.h include/gin_liveness.h src/liveness_values.h src/connect_values.h src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c $(SESSION_SOURCES) $(HISTORY_SOURCES) src/command.c src/control.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -58,12 +80,12 @@ HISTORY_TARGETS = .build/test_history_page .build/test_history_owned .build/test
 .build/runtime_boundaries: tests/runtime_boundaries.c .build/runtime_boundaries.o src/input.c src/fs.c src/naming.c
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_boundaries.c .build/runtime_boundaries.o src/input.c src/fs.c src/naming.c $(LDLIBS)
 
-.build/runtime_stderr.o: src/gin.c include/gin_runtime.h include/gin_config.h include/gin_fs.h
+.build/runtime_stderr.o: src/gin.c include/gin_runtime.h include/gin_config.h include/gin_fs.h $(SESSION_HEADERS)
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Dfputs=fixture_fputs -c src/gin.c -o $@
 
-.build/runtime_stderr: tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/naming.c src/config.c $(LDLIBS)
+.build/runtime_stderr: tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/config.c $(SESSION_SOURCES) $(SESSION_HEADERS) $(CONNECT_SOURCES) $(CONNECT_HEADERS) src/topology_fetch.c
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/runtime_stderr.c .build/runtime_stderr.o src/runtime.c src/input.c src/fs.c src/config.c $(SESSION_SOURCES) $(CONNECT_SOURCES) src/topology_fetch.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
 .build/http_driver: tests/http_driver.c src/http.c include/gin_http.h
 	mkdir -p .build
@@ -132,7 +154,7 @@ HISTORY_TARGETS = .build/test_history_page .build/test_history_owned .build/test
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_phoenix_refs.c src/phoenix_refs.c $(LDLIBS)
 
-check: all $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_liveness .build/liveness_driver .build/test_command .build/test_control .build/control_driver .build/test_connect_query .build/query_driver .build/test_send .build/test_send_payload .build/test_send_reply .build/send_driver .build/test_render .build/test_render_escape .build/test_render_time .build/test_render_output .build/render_driver .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+check: all .build/test_connect_drain .build/test_session_config .build/test_session_owner .build/test_session_owner_whitebox $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_liveness .build/liveness_driver .build/test_command .build/test_control .build/control_driver .build/test_connect_query .build/query_driver .build/test_send .build/test_send_payload .build/test_send_reply .build/send_driver .build/test_render .build/test_render_escape .build/test_render_time .build/test_render_output .build/render_driver .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
 	.build/test_history_page
 	.build/test_history_owned
 	.build/test_history_live
@@ -182,6 +204,14 @@ check: all $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_l
 	.build/test_http_bounds
 	.build/test_naming
 	.build/test_input
+	.build/test_session_config
+	.build/test_session_owner
+	.build/test_session_owner_whitebox
+	.build/test_connect_drain
+	$(PYTHON) tests/test_session.py
+	$(PYTHON) tests/test_session_failures.py
+	$(PYTHON) tests/test_session_permissions.py
+	$(PYTHON) tests/test_session_backlog.py
 	$(PYTHON) tests/test_build_prefix.py
 	$(PYTHON) tests/test_cli.py
 	$(PYTHON) tests/test_locking.py
@@ -189,10 +219,6 @@ check: all $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_l
 	$(PYTHON) tests/test_runtime.py
 	$(PYTHON) tests/test_http.py
 
-CONNECT_HEADERS = include/gin_connect.h include/gin_liveness.h src/liveness_values.h include/gin_command.h include/gin_topology.h src/topology_internal.h include/gin_naming.h src/connect_values.h
-CONNECT_QUERY_SOURCES = src/command.c src/topology.c src/topology_lookup.c
-CONNECT_SUPPORT_SOURCES = src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c src/http.c src/auth.c src/credential.c src/protocol.c src/protocol_parse.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c $(CONNECT_QUERY_SOURCES) src/naming.c
-CONNECT_SOURCES = src/connect.c $(CONNECT_SUPPORT_SOURCES)
 
 .build/connect_driver: tests/connect_driver.c $(CONNECT_SOURCES) $(CONNECT_HEADERS)
 	mkdir -p .build
@@ -203,6 +229,10 @@ CONNECT_SOURCES = src/connect.c $(CONNECT_SUPPORT_SOURCES)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Isrc $(LDFLAGS) -o $@ tests/test_liveness_backoff.c src/liveness_backoff.c $(LDLIBS)
 
 # Private translation-unit clock/I/O faults; do not link connect.c twice.
+.build/test_connect_drain: tests/test_connect_drain.c $(CONNECT_SOURCES) $(CONNECT_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_connect_drain.c $(CONNECT_SUPPORT_SOURCES) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
 .build/test_connect_liveness: tests/test_connect_liveness.c $(CONNECT_SOURCES) $(CONNECT_HEADERS)
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_connect_liveness.c $(CONNECT_SUPPORT_SOURCES) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)

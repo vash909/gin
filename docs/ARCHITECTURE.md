@@ -1,8 +1,10 @@
 # Architecture
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Scope and project boundary
 
@@ -27,19 +29,20 @@ Those numbers describe upstream, not implemented gin support. See
 
 | Area | Implemented scaffold | Intended later |
 | --- | --- | --- |
-| CLI | `--help`, `--version`, `init`, read-only `check`, local-only `run`, explicit `-f` configuration | Connected operation |
+| CLI | Legacy local commands plus explicit `connect`, `connect-check`, private `credential-import` | Messaging integration |
 | Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
 | Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
 | Output | Creates/reuses log; isolated escaped/timestamped renderer and checked append API | Connected runtime integration |
-| Transport | Isolated bounded libcurl GET/POST/DELETE TLS and account authentication APIs, not connected to runtime | Grappa REST plus Phoenix Channels integration |
-| Runtime | One foreground local-only process using POSIX `poll()` and signal self-pipe | Network adapter integration |
+| Transport | Native HTTPS/WSS account-bound startup composed by a separate foreground owner | Messaging, reception and recovery integration |
+| Runtime | Separate local reader and one-root connected startup owner, no chat projection/send | Live reception, FIFO send, liveness/recovery |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
 The isolated [REST/TLS API](HTTP.md) is implemented in `src/http.c` /
 `include/gin_http.h`; it is synchronous and must not run inside poll callbacks.
 The separate [account authentication API](AUTH.md) adds bounded JSON login,
-identity and logout with explicit [private storage](CREDENTIALS.md), but no
-runtime connection or Grappa compatibility claim. The separate
+identity and logout with explicit [private storage](CREDENTIALS.md); the
+[session owner](SESSION.md) composes enrollment and bound startup, not live
+Grappa compatibility. The separate
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) enforce independent caller
 and server floors before authentication. The isolated [owned topology API](TOPOLOGY.md)
 adds fresh config -> bound identity -> one boot fetch, stable numeric/slug/target
@@ -325,5 +328,5 @@ work. No arbitrary IRC, generic RPC or shell execution is exposed.
 
 The isolated [incoming-event renderer and append API](RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
+loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
 qualification is claimed.

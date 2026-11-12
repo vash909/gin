@@ -1,16 +1,21 @@
 # Protocol compatibility and release records
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Current status
 
-Gin is a development scaffold, not a released or operational Grappa client.
+Gin implements subscription-only connected startup, not a released full chat
+client.
 
 - Active documentation baseline: Grappa `87daa4cca9b41fbd6c5f93cb40d6848193f425f9`.
-- Captured upstream protocol: 63; captured upstream server minimum: 1.
-- Implemented gin client declaration: **none**.
+- Captured upstream protocol: 63; captured upstream server minimum: 1. These
+  describe the pinned upstream revision, not the gin declaration.
+- Implemented gin client declaration: `C=4`; required server floor: `R=4` for
+  the [startup-only subset](PROTOCOL.md).
 - Qualified runtime Grappa revisions: **none**.
 - Isolated REST/TLS and account authentication APIs: local HTTP/HTTPS fixtures
   only, including bounded JSON, private credentials and [HTTP discovery with
@@ -18,15 +23,19 @@ Gin is a development scaffold, not a released or operational Grappa client.
   REST query inventory remains unknown without a user-topic snapshot, and no
   live Grappa qualification is claimed; isolated WebSocket acquisition is in
   [CONNECT.md](CONNECT.md). See [authentication scope](AUTH.md).
+- The [connected startup owner](SESSION.md) composes verified HTTPS discovery,
+  stored-origin and account-identity checks, `/boot`, and root-first WSS
+  subscriptions; chat/log projection, sending and recovery are not wired in.
 - Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
   explicit-message fragment collection and reply/reference fixtures only;
   stricter local reference/object-payload policies are documented there.
-  No RFC6455, handshake, subscription, liveness or live compatibility claim.
+  The codec itself performs no RFC6455 handshake, subscriptions or liveness;
+  the separate native connection API owns those transport operations.
 - Published beta/stable releases: **none**.
 
-The proposed server feature floor in [PROTOCOL.md](PROTOCOL.md) is a design
-choice, not a compatibility guarantee. A preserved document or passing local
-filesystem tests do not establish that gin can authenticate or exchange chat.
+The implemented startup floor `R=4` in [PROTOCOL.md](PROTOCOL.md) is a policy
+choice, not a live compatibility guarantee. Preserved documentation and passing
+local fixtures do not establish live Grappa interoperability or chat delivery.
 
 The full client document and upstream license are kept in the
 [versioned snapshots](upstream/grappa/README.md), with provenance and checksums.

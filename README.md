@@ -22,10 +22,13 @@ inspired by [ii](https://tools.suckless.org/ii/). Portable C99 and POSIX.1-2008;
 ordinary files and named pipes instead of another chat UI. Supported target
 platforms are Linux (glibc/musl) and FreeBSD.
 
-**Status: development scaffold, not a working Grappa client or a beta.**
+**Status: subscription-only connected startup, not a messaging client or a beta.**
 The executable initializes a private filesystem tree and validates explicit
-CLI/configuration settings. It does
-not authenticate, connect or send messages. `gin run` is a genuine local-only
+CLI/configuration settings. `gin credential-import` explicitly enrolls a bearer
+from a private file; `gin connect` owns a verified HTTPS/WSS session with bound
+identity, topology and correlated subscriptions. It does not receive chat into
+logs, send messages, reconnect or recover history. See the
+[18.1 startup/session contract](docs/SESSION.md). `gin run` remains a local-only
 foreground FIFO reader with orderly signal shutdown and one held root lock.
 It announces transport unavailability and fails with exit 1 on the first
 nonempty complete input; no input is echoed to logs or claimed delivered.
@@ -39,7 +42,7 @@ are the planned transport, not direct IRC.
 A C99 compiler, POSIX make and TLS-enabled libcurl >=8.23.0 development
 headers/libraries and Jansson >=2.14 are required to build. Tests additionally require Python 3
 and OpenSSL (development only). See the [isolated REST/TLS API](docs/HTTP.md)
-for dependency selection and genuine musl builds; the CLI remains local-only.
+for dependency selection and genuine musl builds. Python remains test-only.
 
 ```sh
 make
@@ -48,7 +51,7 @@ make check
 .build/gin --version
 ```
 
-## Try the implemented scaffold
+## Try local initialization
 
 Choose an existing private parent directory. The root itself must be either
 absent or a private directory owned by your user. See the man page for exact
@@ -96,11 +99,22 @@ deletes or automatically migrates old logs. CLI flags
 override file values; effective root/network/target settings are required. The file must be
 owned by the effective user, single-link, regular and exactly `0600`, without
 a final symlink. No implicit discovery, config environment variables or
-credentials are supported. Relative paths use the invocation cwd.
+credentials are supported by these legacy commands. Relative paths use the invocation cwd.
 
 See [CLI/configuration](docs/CLI.md) for grammar, bounds, security, exit codes
 and the foreground/no-daemon `gin run` contract. `run` accepts the same settings
 but implements local input only, not a connected messaging client.
+
+The separate `connect` / read-only `connect-check` commands require explicit
+HTTPS origin and `mode=plain`, optionally through a separate session settings
+file. Root selection also selects the safe `ROOT/.gin.credentials` store;
+`credential-import` reads exact bearer bytes from an owned0600 single-link file,
+never argv or ordinary settings. Optional nonblocking-pipe readiness reports
+actual correlated READY; no readiness print is made by default. Existing local
+invocations never silently connect. Read [SESSION.md](docs/SESSION.md) before
+enrollment, including private-file, signal/deadline, plaintext assertion and
+subscription-only limits. Live-server qualification remains a separate opt-in
+milestone after all four operational-integration steps.
 
 ## Design boundaries
 
@@ -108,16 +122,17 @@ but implements local input only, not a connected messaging client.
   frontend toolchain or server deployment is required to build gin.
 - C99/POSIX core, foreground single-process design, bounded buffers and explicit
   errors. No TUI, database, plugin framework or custom cryptographic protocol.
-- Isolated synchronous REST/TLS and account [authentication APIs](docs/AUTH.md),
-  with private credential storage; libcurl and Jansson are linked. They are not
-  wired into CLI/runtime callbacks. Isolated [HTTP protocol discovery and gated
+- Synchronous REST/TLS and account [authentication APIs](docs/AUTH.md),
+  with private credential storage; libcurl and Jansson are linked. The connected
+  owner invokes startup work outside callbacks. [HTTP protocol discovery and gated
   authentication](docs/DISCOVERY.md) are implemented, alongside isolated
   [owned network/window topology](docs/TOPOLOGY.md) fetch and pure snapshot APIs.
   REST boot leaves query inventory unknown until a decoded user-topic snapshot.
   The isolated [Phoenix v2 TEXT API](docs/PHOENIX.md) adds bounded encode/decode,
   explicit-message fragment collection, reply identity matching and local refs;
   the isolated [verified-WSS connection API](docs/CONNECT.md) adds root-first
-  correlated subscriptions through libcurl. CLI/runtime integration remains future work.
+  correlated subscriptions through libcurl. Session startup is wired into the
+  production CLI; chat projection/send/recovery integration remains future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
 - E2EE is deferred, **not TLS**. Encrypted conversations must eventually be
@@ -160,7 +175,7 @@ retry or local echo.
 
 The isolated [incoming-event renderer and append API](docs/RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
+loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
 qualification is claimed.
 
 The opt-in [native liveness API](docs/LIVENESS.md) adds Phoenix heartbeats,

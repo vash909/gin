@@ -1,7 +1,8 @@
 # Isolated verified-WSS connection and subscriptions
 
 `include/gin_connect.h` / `src/connect.c` provide an owned, single-owner native
-API, not a connected CLI. The local-only `gin run` remains unchanged. No real
+API. The separate [production startup owner](SESSION.md) now composes this API
+into `gin connect`; local-only `gin run` remains unchanged. No real
 Grappa revision has been qualified. Synthetic local fixtures are not live-server
 interoperability evidence.
 
@@ -72,6 +73,18 @@ liveness uses a lifetime retry budget and explicit-close cancellation; recognize
 session severance is always terminal. No invented epoch bytes can
 distinguish otherwise identical broadcasts. Free closes curl before releasing
 headers/state and best-effort wipes owned secrets, not library allocator copies.
+
+## Receive-drain observation
+
+`gin_connect_receive_drained()` is a local point-in-time observation after a
+successful service reaches actual CURLE_AGAIN with no partial TEXT message.
+Budget exhaustion alone is not evidence of a drained TLS/WebSocket queue.
+I/O iterations, poll readiness, new service, start and teardown invalidate the
+observation; closed/failed/initial sessions return false. Outbound completion
+is independent. This is not an atomic server cut, replay/history barrier or
+guarantee against future data. The production startup owner combines this
+evidence with correlated joins and current route/plain eligibility before READY.
+Existing service work/byte/poll limits and libcurl encoder ownership remain.
 
 ## Authentication encoding correction
 

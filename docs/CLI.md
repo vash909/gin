@@ -1,6 +1,14 @@
 # CLI and configuration
 
-## Implemented commands
+## Local commands (unchanged)
+
+The separate connected `connect`, read-only `connect-check` and private
+`credential-import` commands use a different settings format. See
+[operational startup/session](SESSION.md) for the complete grammar, private
+store selection, C4/R4 policy, readiness pipe and deferred cancellation limits.
+They do not enable chat logs, FIFO sends, automatic reconnect or history.
+
+The remainder of this document describes the legacy local commands.
 
 ```text
 gin --help
@@ -45,8 +53,9 @@ implicit `~/.config` discovery and no configuration environment variables.
 Relative `FILE` and root paths use the invocation's current working directory,
 **not** the configuration file's directory. CLI values are not trimmed.
 
-The isolated [REST/TLS C API](HTTP.md) adds no CLI connection command, URL,
-credential or insecure option, and is not invoked by `run`.
+The [REST/TLS C API](HTTP.md) is not invoked by local `run`. The separate
+[connected startup owner](SESSION.md) composes it with explicit HTTPS origin
+and private enrollment; there is no insecure option or credential argv value.
 
 ## Explicit configuration file
 

@@ -582,7 +582,11 @@ class GinTests(unittest.TestCase):
         result = self.run_gin("--help")
         self.assertIn("gin init -d ROOT -n NETWORK -c TARGET", result.stdout)
         self.assertIn("REST + Phoenix", result.stdout)
-        self.assertIn("not implemented", result.stdout)
+        self.assertIn("Local run has no transport.", result.stdout)
+        self.assertIn("gin connect | connect-check", result.stdout)
+        self.assertIn("gin credential-import", result.stdout)
+        self.assertIn("not chat reception, FIFO sending, history, reconnects or encryption.",
+                      result.stdout)
         self.assertIn("ASCII A-Z", result.stdout)
         self.assertIn("-T CHANTYPES", result.stdout)
         self.assertIn("UTF-8", result.stdout)

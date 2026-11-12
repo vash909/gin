@@ -1,15 +1,18 @@
 # Isolated account authentication API
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Scope and prerequisites
 
 `include/gin_auth.h` / `src/auth.c` implement synchronous account-user login,
 bearer identity validation and current-bearer logout. They are reusable native C
-APIs, not connected CLI commands. `gin run`, configuration and poll callbacks
-remain local-only. The separate [discovery and gated-auth APIs](DISCOVERY.md)
+APIs; the [production startup owner](SESSION.md) now explicitly composes raw
+bearer enrollment and stored UUID-bound resume. `gin run` and its legacy
+configuration remain local-only. The separate [discovery and gated-auth APIs](DISCOVERY.md)
 provide the recommended fresh-preflight path. No WebSocket, messaging, OAuth,
 TOTP or passkey interaction is implemented. Outside synthetic fixtures, the
 low-level caller **must perform the protocol-discovery policy in PROTOCOL.md

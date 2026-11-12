@@ -1,8 +1,10 @@
 # Development
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 The [isolated discovery and gated-auth APIs](DISCOVERY.md) are exercised by
 `make check` in every existing compiler/platform lane. Decoder unit tests and
@@ -140,7 +142,8 @@ All `make check` lanes include them. `GIN_LIVENESS_DRIVER` selects a private
 native driver and `GIN_LIVENESS_PREFIX` supplies an instrumentation wrapper;
 Valgrind runs in the full local and CI gates. Shims are test-only and do not
 qualify real libcurl/TLS behavior; native fixtures cover that separate boundary.
-The CLI remains local-only, with no live Grappa compatibility claim.
+Production `connect` now composes subscription-only startup; chat integration
+and live Grappa compatibility remain unqualified.
 
 ## Owned topology testing
 
@@ -253,7 +256,7 @@ record the qualification evidence specified in [COMPATIBILITY.md](COMPATIBILITY.
 
 The isolated [incoming-event renderer and append API](RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
+loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
 qualification is claimed.
 
 Plain-send native tests are part of `make check`: `tests/test_send.py` composes
