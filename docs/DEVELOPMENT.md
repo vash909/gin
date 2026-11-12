@@ -102,6 +102,36 @@ claimed. All four units also run under Valgrind in CI and `scripts/check.sh`;
 normal platform, musl, NDEBUG and sanitizer `make check` lanes include them.
 Fixtures need no server and do not qualify a real WebSocket connection.
 
+## Native history testing
+
+[History and bounded gap recovery](HISTORY.md) use separate page/live, request-path,
+recovery, presentation and native-fetch boundaries. `make check` includes real
+owned constructors and allocator faults (`test_history_page`, `test_history_owned`),
+actual borrowed-frame validation (`test_history_live`), real-constructor recovery
+with private boundary/failure state (`test_history_recovery`), isolated request
+encoding (`test_history_path`), a deterministic JSON-key work bound
+(`test_history_evidence`) and presentation-only goldens (`test_render_plain`).
+Path validator facades are not route or JSON qualification; the real native HTTPS
+suite exercises those together. The evidence unit and owned/whitebox units include
+implementation files privately: list them as prerequisites, never link twice.
+
+`test_history_http.py` uses `GIN_HISTORY_DRIVER` to select the private HTTP driver;
+`test_history.py` uses `GIN_HISTORY_WSS_DRIVER` for the composed WSS/HTTPS owner.
+Both use `GIN_HISTORY_PREFIX` for instrumentation. Their normal defaults point to
+separate `.build` binaries. All native compiler/platform lanes execute them; the
+local and CI Valgrind tails retain strict leak/error policy. No live Grappa,
+recipient delivery, encrypted inbox, persistent checkpoints or connected CLI is
+qualified by these fixtures. IDs and timestamps are not interchangeable, and
+unrelated event counters are not state-readiness barriers. The composed fixture
+also starts a second native process against the same server and output root,
+using a caller-retained successful processing anchor. It checks preserved output
+bytes/inode, reacquired root locking and fresh subscriptions; it does not persist
+that anchor or simulate a crash between append and checkpoint. During synchronous
+HTTPS, live bytes wait in the WSS socket; callbacks run afterward, before REST
+page admission. This is not concurrent callback execution or a server replay
+barrier. Intentional process teardown waits for the old socket handler to close
+before beginning the next session.
+
 ## Native liveness testing
 
 The [native liveness policy](LIVENESS.md) adds a pure capped-backoff unit,

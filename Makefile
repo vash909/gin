@@ -16,9 +16,16 @@ JANSSON_LIBS = $${JANSSON_LIBS:-$$(pkg-config --libs jansson)}
 
 all: .build/gin
 
-.build/gin: include/gin_command.h include/gin_control.h src/command.c src/control.c include/gin_send.h src/send_values.h include/gin_render.h src/render_values.h src/gin.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c include/gin_connect.h include/gin_liveness.h src/liveness_values.h src/connect_values.h src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
+HISTORY_PURE_SOURCES = src/history_page.c src/history_evidence.c src/history_path.c src/history_recovery.c
+HISTORY_SOURCES = $(HISTORY_PURE_SOURCES) src/history_fetch.c src/history_render.c
+HISTORY_HEADERS = include/gin_history.h src/history_values.h src/history_evidence.h include/gin_render.h
+HISTORY_PAGE_SUPPORT = src/naming.c src/connect_topic.c src/phoenix.c src/http.c
+HISTORY_TARGETS = .build/test_history_page .build/test_history_owned .build/test_history_live .build/test_history_recovery .build/test_history_path .build/test_history_evidence .build/test_render_plain .build/history_http_driver .build/history_driver
+
+
+.build/gin: $(HISTORY_SOURCES) $(HISTORY_HEADERS) include/gin_command.h include/gin_control.h src/command.c src/control.c include/gin_send.h src/send_values.h include/gin_render.h src/render_values.h src/gin.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c include/gin_connect.h include/gin_liveness.h src/liveness_values.h src/connect_values.h src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c include/gin_phoenix.h src/topology_internal.h include/gin_topology.h include/gin_protocol.h include/gin_auth.h include/gin_credential.h include/gin_http.h include/gin_runtime.h include/gin_input.h include/gin_fs.h include/gin_config.h include/gin_naming.h
 	mkdir -p .build
-	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c src/command.c src/control.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ src/gin.c $(HISTORY_SOURCES) src/command.c src/control.c src/send.c src/send_payload.c src/send_reply.c src/render.c src/render_escape.c src/render_time.c src/fs.c src/config.c src/naming.c src/input.c src/runtime.c src/http.c src/auth.c src/protocol.c src/protocol_parse.c src/credential.c src/topology.c src/topology_fetch.c src/topology_lookup.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
 .build/test_naming: tests/test_naming.c src/naming.c include/gin_naming.h
 	mkdir -p .build
@@ -125,7 +132,16 @@ all: .build/gin
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_phoenix_refs.c src/phoenix_refs.c $(LDLIBS)
 
-check: all .build/test_liveness_backoff .build/test_connect_liveness .build/liveness_driver .build/test_command .build/test_control .build/control_driver .build/test_connect_query .build/query_driver .build/test_send .build/test_send_payload .build/test_send_reply .build/send_driver .build/test_render .build/test_render_escape .build/test_render_time .build/test_render_output .build/render_driver .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+check: all $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_liveness .build/liveness_driver .build/test_command .build/test_control .build/control_driver .build/test_connect_query .build/query_driver .build/test_send .build/test_send_payload .build/test_send_reply .build/send_driver .build/test_render .build/test_render_escape .build/test_render_time .build/test_render_output .build/render_driver .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+	.build/test_history_page
+	.build/test_history_owned
+	.build/test_history_live
+	.build/test_history_recovery
+	.build/test_history_path
+	.build/test_history_evidence
+	.build/test_render_plain
+	$(PYTHON) tests/test_history_http.py
+	$(PYTHON) tests/test_history.py
 	.build/test_liveness_backoff
 	.build/test_connect_liveness
 	$(PYTHON) tests/test_liveness.py
@@ -266,6 +282,45 @@ uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/bin/gin" "$(DESTDIR)$(PREFIX)/share/man/man1/gin.1"
 
 RENDER_SOURCES = src/render.c src/render_escape.c src/render_time.c
+
+# History units use the real page implementation except explicit path facades.
+.build/test_history_page: tests/test_history_page.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(HISTORY_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_history_page.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_history_live: tests/test_history_live.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(HISTORY_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_history_live.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_history_owned: tests/test_history_page.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(HISTORY_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ -DTEST_OWNED_FAULT tests/test_history_page.c src/history_evidence.c $(HISTORY_PAGE_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_history_recovery: tests/test_history_recovery.c $(HISTORY_PURE_SOURCES) $(HISTORY_PAGE_SUPPORT) $(HISTORY_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ -DGIN_HISTORY_RECOVERY_REAL_PAGE -DGIN_HISTORY_RECOVERY_WHITEBOX tests/test_history_recovery.c src/history_page.c src/history_evidence.c $(HISTORY_PAGE_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_history_path: tests/test_history_path.c src/history_path.c $(HISTORY_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_history_path.c src/history_path.c $(LDLIBS)
+
+# Evidence unit includes its implementation for a private work counter.
+.build/test_history_evidence: tests/test_history_evidence.c src/history_evidence.c src/history_evidence.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_history_evidence.c $(JANSSON_LIBS) $(LDLIBS)
+
+.build/test_render_plain: tests/test_render_plain.c $(RENDER_SOURCES) src/phoenix.c src/naming.c src/connect_topic.c include/gin_render.h src/render_values.h
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_render_plain.c $(RENDER_SOURCES) src/phoenix.c src/naming.c src/connect_topic.c $(JANSSON_LIBS) $(LDLIBS)
+
+.build/history_http_driver: tests/history_http_driver.c $(HISTORY_SOURCES) $(CONNECT_SOURCES) $(RENDER_SOURCES) src/fs.c $(HISTORY_HEADERS) $(CONNECT_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/history_http_driver.c $(HISTORY_SOURCES) $(CONNECT_SOURCES) $(RENDER_SOURCES) src/fs.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.build/history_driver: tests/history_driver.c $(HISTORY_SOURCES) $(CONNECT_SOURCES) $(RENDER_SOURCES) src/fs.c $(HISTORY_HEADERS) $(CONNECT_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/history_driver.c $(HISTORY_SOURCES) $(CONNECT_SOURCES) $(RENDER_SOURCES) src/fs.c $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
 
 .build/test_render: tests/test_render.c $(RENDER_SOURCES) src/phoenix.c src/naming.c src/connect_topic.c include/gin_render.h src/render_values.h
 	mkdir -p .build

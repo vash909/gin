@@ -197,6 +197,45 @@ enum gin_render_code gin_render_event(const struct gin_phoenix_frame *frame,
     record->length = b.length; memcpy(record->data, b.data, b.length + 1u);
     *out = record; return GIN_RENDER_OK;
 }
+enum gin_render_code gin_render_plain_message(const char *kind,
+    const unsigned char *sender, size_t sender_length,
+    const unsigned char *body, size_t body_length, int64_t server_ms,
+    enum gin_render_encryption mode, struct gin_render_record **out)
+{
+    struct builder b;
+    struct gin_render_record *record;
+    char time[GIN_RENDER_TIME_CAP];
+    enum gin_render_code code;
+    if (!kind || !out || *out || (!sender && sender_length) ||
+        (!body && body_length) || mode < GIN_RENDER_MODE_UNKNOWN ||
+        mode > GIN_RENDER_MODE_ENCRYPTED) return GIN_RENDER_INVALID;
+    if (mode != GIN_RENDER_MODE_PLAIN || !strncmp(kind, "e2e_", 4))
+        return GIN_RENDER_UNSUPPORTED_ENCRYPTION;
+    if (sender_length > GIN_RENDER_SENDER_MAX || body_length > GIN_RENDER_BODY_MAX)
+        return GIN_RENDER_LIMIT;
+    if (e2e_body((const char *)body, body_length)) return GIN_RENDER_UNSUPPORTED_ENCRYPTION;
+    if (strcmp(kind, "privmsg") && strcmp(kind, "notice") && strcmp(kind, "action"))
+        return GIN_RENDER_IGNORE;
+    if (gin_render_time(server_ms, time) != GIN_RENDER_VALUE_OK) return GIN_RENDER_RANGE;
+    if (!strcmp(kind, "action") && body_length >= 8u && !memcmp(body, "\001ACTION ", 8)) {
+        body += 8; body_length -= 8;
+        if (body_length && body[body_length - 1u] == '\001') body_length--;
+    }
+    memset(&b, 0, sizeof(b));
+#define ADD_PLAIN(expr) do { code = (expr); if (code != GIN_RENDER_OK) return code; } while (0)
+    ADD_PLAIN(literal(&b, "[")); ADD_PLAIN(literal(&b, time));
+    ADD_PLAIN(literal(&b, "] ")); ADD_PLAIN(literal(&b, kind));
+    ADD_PLAIN(quoted(&b, " sender", (const char *)sender, sender_length, GIN_RENDER_SENDER_MAX));
+    ADD_PLAIN(quoted(&b, " body", (const char *)body, body_length, GIN_RENDER_BODY_MAX));
+    ADD_PLAIN(literal(&b, "\n"));
+#undef ADD_PLAIN
+    record = malloc(sizeof(*record) + b.length + 1u);
+    if (!record) return GIN_RENDER_NOMEM;
+    record->length = b.length;
+    memcpy(record->data, b.data, b.length + 1u);
+    *out = record;
+    return GIN_RENDER_OK;
+}
 struct gin_phoenix_view gin_render_record_bytes(const struct gin_render_record *record)
 {
     struct gin_phoenix_view b = {NULL, 0};

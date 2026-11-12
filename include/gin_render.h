@@ -86,6 +86,17 @@ enum gin_render_code gin_render_event(const struct gin_phoenix_frame *frame,
 struct gin_phoenix_view gin_render_record_bytes(const struct gin_render_record *record);
 void gin_render_record_free(struct gin_render_record *record);
 
+/* Pure presentation ONLY, not authentication, topic/route validation or mode
+ * detection. Owner must validate source/binding first (e.g. a history page).
+ * Explicit PLAIN required; only privmsg/notice/action. Unknown kinds IGNORE,
+ * reserved e2e_ kinds/CTCP E2E refuse. NULL bytes allowed only with length0.
+ * Same escaping/time/body/sender limits and line format as gin_render_event;
+ * out freshNULL, unchanged on failure/IGNORE. Owned output survives inputs. */
+enum gin_render_code gin_render_plain_message(const char *kind,
+    const unsigned char *sender, size_t sender_length,
+    const unsigned char *body, size_t body_length, int64_t server_ms,
+    enum gin_render_encryption mode, struct gin_render_record **out);
+
 /* Outside callbacks: append one complete owned record to a caller-owned fd
  * opened by gin_root_output_open under the same live held root. Recheck file
  * type/owner/exact0600/single-link and O_APPEND/write access before writes.

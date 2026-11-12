@@ -166,4 +166,9 @@ qualification is claimed.
 The opt-in [native liveness API](docs/LIVENESS.md) adds Phoenix heartbeats,
 monotonic deadlines, finite owner-driven reconnect scheduling and fail-closed
 session-severance handling. It never silently replays user operations or makes
-`gin run` connected; history/gap recovery and live qualification remain future work.
+`gin run` connected; live qualification remains future work.
+
+The isolated [history and bounded gap-recovery APIs](docs/HISTORY.md) add ID-only
+pagination, owned REST/live rows and scoped identity deduplication. Buffered live
+IDs never skip the REST catch-up cursor. Visible drain is not proof of complete
+original history, durability or exactly-once output; `gin run` remains local-only.

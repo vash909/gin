@@ -270,7 +270,10 @@ of a per-channel fetch storm. Paginate focused gaps using
 `GET /networks/:network_id/channels/:channel_id/messages?after=<id>`;
 use `before=<id>` for older history and `around=<id>` for a centered page.
 Only one of the six ID/time cursors may be supplied. HTTP page size defaults
-to 50 and is capped at 200. Source: `GrappaWeb.MessagesController.index/2`,
+to 50; a supplied limit must be 1..200, with larger values rejected rather than
+silently clamped. Actual focused latest/before pages are ID-descending and after
+pages ID-ascending despite older controller prose about timestamp order. Source:
+`GrappaWeb.MessagesController.index/2`,
 `parse_direction/1`, `parse_limit/1`, `GrappaWeb.BootJSON.index/1`.[4][10]
 
 Time cursors `before_time`, `after_time`, `around_time` require server protocol
@@ -286,6 +289,16 @@ Use `dm_with` (v36) for DM row classification when available; a peer rename
 does not move its old query/history. Keep a deliberate older-server fallback,
 or raise the feature floor rather than requiring v36 accidentally. Source:
 contract section 5h; `Grappa.Protocol`'s v36/v37 entries.[1][2]
+
+The isolated [native history API](HISTORY.md) implements the deliberate subset
+latest/before/after by ID, raising its query floor to 36. It does not emit time,
+around or count selectors. The recovery planner advances its REST pagination
+cursor only from accepted REST pages, never the buffered live maximum. A short
+page means visible drain at that request, not complete original history.
+Read cursors, boot heads and ID jumps do not prove processed/delivered continuity;
+there is no retention watermark, server-generation token or atomic REST/WSS cut.
+Caller-owned output/checkpoint policy remains separate, and append-only files
+cannot reorder previously written logs. The CLI remains local-only.
 
 ## Encryption boundary: fail closed
 
