@@ -1,8 +1,10 @@
 # Pure Phoenix v2 TEXT API
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Scope and sources
 

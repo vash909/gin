@@ -1,8 +1,10 @@
 # Bounded REST/TLS adapter
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Actual scope
 
@@ -11,10 +13,12 @@ GET/POST/DELETE transport. The separate [account authentication API](AUTH.md) ad
 login/identity/logout; [HTTP discovery](DISCOVERY.md) adds protocol preflight
 and gated authentication. This transport itself does not parse JSON, negotiate
 protocols, implement WebSockets or deliver messages. Response bodies
-are opaque bytes, including NUL. The installed CLI has **no network command**;
-`gin run` remains local-only and fails closed on sending. This adapter must not
-be called from runtime callbacks, which must remain bounded and nonblocking.
-Future integration needs a separately reviewed scheduling/lifecycle design.
+are opaque bytes, including NUL. The installed native CLI includes `connect`,
+`connect-check`, and `credential-import`; `gin run` remains local-only and
+fails closed on sending. Low-level HTTP callbacks must remain bounded and
+nonblocking; synchronous HTTP calls run outside runtime callbacks. Chat
+projection, message sending, reconnection, history, and E2EE integration
+remain deferred and require separately reviewed scheduling/lifecycle work.
 
 ## API and ownership
 

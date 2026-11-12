@@ -1,7 +1,8 @@
 # Incoming event rendering (isolated native API)
 
 `include/gin_render.h` defines the pure renderer and outside-callback append API.
-The CLI remains local-only. These APIs do not send, acknowledge, decrypt,
+Connected session startup does not yet project chat; [18.2](../ROADMAP.md)
+will integrate reception. These APIs do not send, acknowledge, decrypt,
 reconnect, fetch history or establish live Grappa compatibility.
 
 ## Trusted owner and routing

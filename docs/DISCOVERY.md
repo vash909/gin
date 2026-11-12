@@ -1,15 +1,18 @@
 # Isolated HTTP protocol discovery and gated authentication
 
 The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The CLI remains local-only;
-No live Grappa interoperability is claimed.
+root-first subscriptions through libcurl >=8.23.0. The separate
+[production startup owner](SESSION.md) now composes a subscription-only connected
+CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+interoperability is claimed.
 
 ## Scope and caller policy
 
 `include/gin_protocol.h`, `src/protocol_parse.c` and `src/protocol.c` implement
 bounded discovery and comparison, and composition with the existing native
-account authentication APIs. They do not connect the CLI or foreground runtime,
-open WebSockets, discover networks/windows, send messages or implement E2EE.
+account authentication APIs. The [startup owner](SESSION.md) composes them
+outside callbacks with topology and WSS; these low-level functions themselves
+open no WebSockets, discover no networks/windows, send no messages or E2EE.
 No gin wire declaration is inferred from the pinned server's current version.
 
 The caller explicitly supplies positive integer `client_protocol` (`C`) and
@@ -32,8 +35,11 @@ compatibility gates or evidence of E2EE support.
 The source-reviewed endpoint is `ConfigController.show/2` at the full revision
 listed in [PROTOCOL.md](PROTOCOL.md), alongside `Grappa.Protocol` and
 `UserSocket.check_protocol_version/1`. The captured 63/1 values describe that
-upstream revision only, not constants in this implementation. The proposed
-future `/boot` floor 4 is a design choice, not a claim of implemented `/boot`.
+upstream revision only, not constants in this low-level discovery API. The
+[startup owner](SESSION.md) supplies `C=4` and `R=4` for its implemented
+`/boot` and root-first WSS subscription subset; see [PROTOCOL.md](PROTOCOL.md).
+It composes verified HTTPS discovery, stored-origin and account-identity checks,
+then topology and WSS acquisition. No live Grappa revision is qualified.
 
 ## Fetch and failure boundaries
 
