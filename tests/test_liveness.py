@@ -425,8 +425,13 @@ class LivenessTests(unittest.TestCase):
             self.assertEqual(state["events"], 1, "heartbeat ACK barrier must reach client while JOINING")
             self.assertEqual(state["connection"], 2)
             self.assertEqual([f[3] for _, f in srv.frames], ["phx_join", "phx_join", "heartbeat"])
-            srv.actions.put("release")
+            # Another unrelated event must not stand in for completed joins.
+            srv.actions.put([None, None, ROOT_TOPIC, "event", {"kind": "fixture_noise"}])
             state = d.command("until 10000 2")
+            self.assertEqual(state["connection"], 2)
+            self.assertGreaterEqual(state["events"], 2)
+            srv.actions.put("release")
+            state = d.command("ready 10000")
             self.assertEqual(state["connection"], 3)
             self.assertEqual(state["code"], "ok")
 

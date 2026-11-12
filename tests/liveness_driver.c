@@ -96,7 +96,8 @@ int main(int argc, char **argv)
         else if (!strcmp(command, "take")) {
             struct gin_query_result q;
             step = gin_connect_query_take(s, &q);
-        } else if (!strcmp(command, "drive") || !strcmp(command, "until")) {
+        } else if (!strcmp(command, "drive") || !strcmp(command, "until") ||
+                   !strcmp(command, "ready")) {
             double end;
             assert(a <= 60000 && b <= 10000);
             end = now() + (double)a / 1000.0;
@@ -104,6 +105,8 @@ int main(int argc, char **argv)
                 if (gin_connect_get_state(s) == GIN_CONNECT_FAILED ||
                     gin_connect_get_state(s) == GIN_CONNECT_STOPPED) break;
                 if (!strcmp(command, "until") && o.events >= b) break;
+                if (!strcmp(command, "ready") &&
+                    gin_connect_get_state(s) == GIN_CONNECT_READY) break;
                 (void)gin_connect_service(s, 20);
             } while (now() < end);
         } else if (strcmp(command, "status")) assert(!"unknown owner command");
