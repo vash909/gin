@@ -192,7 +192,7 @@ ordering nor absence of loss. No outgoing send/query/JOIN/PART is replayed.
 
 Pure constructor/fault tests, real native HTTPS tests, and a composed native
 WSS/HTTPS/held-root append fixture are separate boundaries. Shim and facade tests
-are not live-server interoperability or native macOS/FreeBSD evidence. The
+are not live-server interoperability or native FreeBSD evidence. The
 complete matrix and independent final-source review must qualify the final PR;
 local privileged ownership skips remain explicit and require the isolated CI
 lane. See [development](DEVELOPMENT.md) and [connection liveness](LIVENESS.md).
