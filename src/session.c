@@ -117,7 +117,8 @@ static int borrow_pipe(int fd, int writing)
     if (fstat(fd, &st) < 0 || !S_ISFIFO(st.st_mode)) return -1;
     flags = fcntl(fd, F_GETFL);
     if (flags < 0 || !(flags & O_NONBLOCK) ||
-        (flags & O_ACCMODE) != (writing ? O_WRONLY : O_RDONLY)) return -1;
+        ((flags & O_ACCMODE) != (writing ? O_WRONLY : O_RDONLY) &&
+         (flags & O_ACCMODE) != O_RDWR)) return -1;
     if (writing && fpathconf(fd, _PC_PIPE_BUF) < 6) return -1;
     return fcntl(fd, F_DUPFD_CLOEXEC, 3);
 }

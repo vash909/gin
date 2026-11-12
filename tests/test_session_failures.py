@@ -530,15 +530,22 @@ class SessionFailures(unittest.TestCase):
 
     def test_status_fd_flags_direction_and_nonpipe_fail_before_root(self) -> None:
         with self.fixture() as (srv, origin), contextlib.ExitStack() as stack:
-            read_fd, write_fd = os.pipe()
+            # pipe() endpoints may both be O_RDWR (for example on FreeBSD).
+            # Named FIFO opens supply genuinely opposite access capabilities.
+            fifo = self.base / 'directions'
+            os.mkfifo(fifo, 0o600)
+            read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
             stack.callback(os.close, read_fd)
+            write_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
             stack.callback(os.close, write_fd)
+            os.set_blocking(write_fd, True)
             file_fd = stack.enter_context((self.base / 'status').open('wb')).fileno()
             for fd in [write_fd, read_fd, file_fd]:
-                os.set_blocking(read_fd, False)
                 self.quiet(self.run_cli([*self.args(origin), '-R', str(fd)], pass_fds=(fd,)), 1)
+            os.set_blocking(write_fd, False)
+            self.quiet(self.run_cli([*self.args(origin), '-E'], stdin=write_fd), 1)
             self.assertFalse(os.get_blocking(read_fd), 'caller input flags changed')
-            self.assertTrue(os.get_blocking(write_fd), 'caller output flags changed')
+            self.assertFalse(os.get_blocking(write_fd), 'caller output flags changed')
             self.quiet(self.run_cli([*self.args(origin), '-E'], stdin=subprocess.DEVNULL), 1)
             self.assertFalse(self.root.exists())
             self.assertEqual(srv.paths, [])

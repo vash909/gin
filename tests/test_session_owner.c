@@ -5,6 +5,7 @@
 #include "gin_fs.h"
 #include "gin_credential.h"
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -30,8 +31,65 @@ static int descriptor_count(void)
 static void prior_handler(int number) { (void)number; }
 #ifdef OWNER_WHITEBOX
 #include "../src/session.c"
+static void pipe_capabilities(void)
+{
+    char base[4096], path[4096], byte;
+    int fds[3], i, writing, before = descriptor_count();
+    scratch_directory(base, sizeof(base), "gin-session-capabilities");
+    assert(snprintf(path, sizeof(path), "%s/fifo", base) > 0);
+    assert(mkfifo(path, 0600) == 0);
+    fds[0] = open(path, O_RDONLY | O_NONBLOCK);
+    assert(fds[0] >= 0);
+    fds[1] = open(path, O_WRONLY | O_NONBLOCK);
+    assert(fds[1] >= 0);
+    /* Real O_RDWR FIFO exercises access capability, not native pipe EOF or
+     * peer-close semantics. The ordinary pipe EOF test below remains native. */
+    fds[2] = open(path, O_RDWR | O_NONBLOCK);
+    assert(fds[2] >= 0);
+    for (i = 0; i < 3; ++i) {
+        int flags = fcntl(fds[i], F_GETFL), fdflags = fcntl(fds[i], F_GETFD);
+        assert((flags & O_ACCMODE) == (i == 0 ? O_RDONLY : i == 1 ? O_WRONLY : O_RDWR));
+        for (writing = 0; writing < 2; ++writing) {
+            int borrowed = borrow_pipe(fds[i], writing);
+            if ((i == 0 && writing) || (i == 1 && !writing)) {
+                assert(borrowed < 0);
+            } else {
+                assert(borrowed >= 3 && borrowed != fds[i]);
+                assert(fcntl(borrowed, F_GETFD) & FD_CLOEXEC);
+                if (writing) {
+                    struct owner o;
+                    char record[6];
+                    owner_init(&o); o.status = borrowed;
+                    assert(publish_ready(&o) == GIN_SESSION_OK);
+                    assert(read(fds[0], record, sizeof(record)) == 6);
+                    assert(!memcmp(record, "READY\n", 6));
+                } else {
+                    assert(write(fds[1], "x", 1) == 1);
+                    assert(read(borrowed, &byte, 1) == 1 && byte == 'x');
+                }
+                assert(close(borrowed) == 0);
+            }
+            assert(fcntl(fds[i], F_GETFL) == flags);
+            assert(fcntl(fds[i], F_GETFD) == fdflags);
+        }
+        assert(fcntl(fds[i], F_SETFL, flags & ~O_NONBLOCK) == 0);
+        assert(borrow_pipe(fds[i], 0) < 0 && borrow_pipe(fds[i], 1) < 0);
+        assert(fcntl(fds[i], F_GETFL) == (flags & ~O_NONBLOCK));
+        assert(fcntl(fds[i], F_GETFD) == fdflags);
+        assert(fcntl(fds[i], F_SETFL, flags) == 0);
+    }
+    for (i = 0; i < 3; ++i) assert(close(fds[i]) == 0);
+    assert(unlink(path) == 0);
+    i = open(path, O_CREAT | O_EXCL | O_RDWR | O_NONBLOCK, 0600);
+    assert(i >= 0);
+    assert(borrow_pipe(i, 0) < 0 && borrow_pipe(i, 1) < 0);
+    assert(fcntl(i, F_GETFL) >= 0 && close(i) == 0);
+    assert(unlink(path) == 0 && rmdir(base) == 0);
+    assert(descriptor_count() == before);
+}
 static void whitebox(void)
 {
+    pipe_capabilities();
     static const char *const payloads[] = {
         "{\"kind\":\"query_windows_list\",\"windows\":{}}",
         "{\"windows\":{},\"k\\u0069nd\":\"query_windows_\\u006cist\"}",
@@ -138,6 +196,8 @@ int main(void)
             assert(dup2(fds[0],0)==0); assert(close(fds[0])==0);
             assert(write(fds[1],"x",1)==1);
             assert(gin_session_run(&s,-1,1)==GIN_SESSION_INPUT);
+            /* INPUT must mean consumed data, not descriptor validation failure. */
+            { char byte; assert(read(0,&byte,1)<0 && (errno==EAGAIN || errno==EWOULDBLOCK)); }
             assert(close(fds[1])==0);
             assert(gin_session_run(&s,-1,1)==GIN_SESSION_OK);
             assert(fcntl(0,F_GETFL)==(flags|O_NONBLOCK));
