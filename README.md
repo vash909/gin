@@ -161,3 +161,8 @@ The isolated [incoming-event renderer and append API](docs/RENDER.md) projects
 owned, bounded records and supports held-root append outside callbacks. Native
 loopback WSS fixtures exercise it; the CLI remains local-only and no live Grappa
 qualification is claimed.
+
+The opt-in [native liveness API](docs/LIVENESS.md) adds Phoenix heartbeats,
+monotonic deadlines, finite owner-driven reconnect scheduling and fail-closed
+session-severance handling. It never silently replays user operations or makes
+`gin run` connected; history/gap recovery and live qualification remain future work.

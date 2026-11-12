@@ -245,22 +245,25 @@ relay semantics and mutually exclusive, not substitutes for the URL window.
 Gin must implement and test them explicitly before exposing such controls.
 Source: `GrappaWeb.MessagesController.create/2`.[4]
 
-## Heartbeat, reconnect and history (planned)
+## Native heartbeat/reconnect policy; planned history recovery
 
 Send an application-level `heartbeat` on topic `phoenix` with null join ref
 and a fresh request ref; a WebSocket ping alone does not replace it. The
 reference C client uses a 25-second cadence in `ws_connect()` / `ws_pump()`;
 this is an implementation example, not a negotiated server timeout.[16]
 
-Gin's design adds a monotonic heartbeat/reply deadline, bounded reconnect
-backoff with jitter, and fresh join references after reconnect. Rejoin the
-user root before restoring dependent subscriptions; stale socket references
-must not authorize a new push. Stop automatic retries on revoked credentials,
-explicit session severance, scope refusal or an unsatisfied protocol floor.
-Do not silently replay uncertain sends: HTTP failure can occur after the
-server acted. These are intended gin policies, not implemented guarantees.
-The upstream reference's `ws_try_reconnect()` re-subscribes and refreshes state;
-`getSocket()` rebuilds on bearer rotation rather than reusing captured auth.[16][9]
+The opt-in [native liveness API](LIVENESS.md) uses a monotonic heartbeat/reply
+deadline, finite lifetime retry budget, deterministic capped exponential backoff
+without jitter, and fresh join references after reconnect. Jitter is not a wire
+requirement or a guarantee of this local policy. The owner explicitly invokes
+due synchronous retries outside service/callbacks; user-root subscriptions
+precede dependent subscriptions. Stale references cannot authorize a new push.
+Revoked credentials, recognized session severance, scope refusal and an unmet
+protocol floor are terminal. Unconsumed query receipts block reconnect, and no
+uncertain operation is silently replayed: HTTP failure can follow server effects.
+The CLI remains local-only. The upstream reference's `ws_try_reconnect()` also
+refreshes state, and `getSocket()` rebuilds on bearer rotation; gin does not claim
+those broader recovery capabilities here.[16][9]
 
 Prefer `/boot` plus `/me` for cold start and broad resynchronization instead
 of a per-channel fetch storm. Paginate focused gaps using
