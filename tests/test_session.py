@@ -54,7 +54,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         srv.paths.append(self.path)
         if self.path == '/api/config':
             assert self.headers.get('Authorization') is None, 'credentialed discovery'
-            body = {'server': 'grappa', 'protocol_version': 7, 'min_protocol_version': 1}
+            body = {'server': 'grappa', 'protocol_version': 36, 'min_protocol_version': 1}
         elif self.path == '/me':
             assert self.headers.get('Authorization') == 'Bearer ' + TOKEN, 'invalid identity authorization'
             body = {'kind': 'user', 'id': UUID, 'name': 'Alice'}
@@ -63,7 +63,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = {'networks': [{'id': 3000000001, 'slug': 'NetA', 'nick': 'OwnA'}],
                     'channels': {'NetA': [{'name': '#Room', 'joined': True, 'source': 'joined'}]},
                     'heads': {}}
-        elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=4':
+        elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=36':
             self.upgrade()
             return
         else:
@@ -104,7 +104,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 jr, ref, topic, event, body = frame
                 assert event == 'phx_join' and body == {} and jr == ref, 'invalid join shape'
                 srv.joins.append(topic)
-                reply = [jr, ref, topic, 'phx_reply', {'status': 'ok', 'response': {'protocol_version': 7} if index == 0 else {}}]
+                reply = [jr, ref, topic, 'phx_reply', {'status': 'ok', 'response': {'protocol_version': 36} if index == 0 else {}}]
                 if index == 2:
                     srv.final_requested.set()
                     assert srv.release_final.wait(60 if PREFIX else 8), 'final-ACK barrier expired'
@@ -207,7 +207,7 @@ class StartupTracer(unittest.TestCase):
                 self.assertEqual(os.read(read_fd, 128), b'READY\n', 'invalid readiness record')
                 self.assertIsNone(proc.poll(), 'READY was not a live foreground session')
                 self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                    '/socket/websocket?vsn=2.0.0&client_proto=4'])
+                    '/socket/websocket?vsn=2.0.0&client_proto=36'])
                 self.assertEqual(srv.joins, ['grappa:user:Alice', 'grappa:user:Alice/network:NetA',
                     'grappa:user:Alice/network:NetA/channel:#room'])
                 srv.client_close_expected.set()
@@ -218,7 +218,7 @@ class StartupTracer(unittest.TestCase):
                 for secret in [TOKEN.encode(), b'YWF+']:
                     self.assertNotIn(secret, stdout + stderr, 'credential disclosed')
                 self.assertEqual(credential.read_bytes(), before, 'connect mutated credential store')
-                self.assertFalse((root / 'NetA').exists(), 'session-only stage projected chat files')
+                self.assertEqual(list(root.rglob('out')), [], 'startup without chat projected output')
                 check = subprocess.run(self.command('init', '-d', root, '-n', 'NetA', '-c', '#Room'),
                     capture_output=True, timeout=30 if PREFIX else 5)
                 self.assertEqual(check.returncode, 0, 'root lock leaked after session teardown')

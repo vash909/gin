@@ -585,8 +585,9 @@ class GinTests(unittest.TestCase):
         self.assertIn("Local run has no transport.", result.stdout)
         self.assertIn("gin connect | connect-check", result.stdout)
         self.assertIn("gin credential-import", result.stdout)
-        self.assertIn("not chat reception, FIFO sending, history, reconnects or encryption.",
-                      result.stdout)
+        self.assertIn("selected-window chat into safe logs.", result.stdout)
+        self.assertIn("No FIFO sending, history, reconnects", result.stdout)
+        self.assertIn("Connected policy C36/R36", result.stdout)
         self.assertIn("ASCII A-Z", result.stdout)
         self.assertIn("-T CHANTYPES", result.stdout)
         self.assertIn("UTF-8", result.stdout)

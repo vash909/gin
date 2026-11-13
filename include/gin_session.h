@@ -5,8 +5,8 @@
 
 /* Production startup subset declaration, not the pinned server's current
  * version or a claim of all later chat/history features. */
-#define GIN_SESSION_CLIENT_PROTOCOL 4
-#define GIN_SESSION_SERVER_MIN 4
+#define GIN_SESSION_CLIENT_PROTOCOL 36
+#define GIN_SESSION_SERVER_MIN 36
 #define GIN_SESSION_ORIGIN_MAX 1024u
 #define GIN_SESSION_PATH_MAX 4095u
 #define GIN_SESSION_MODE_MAX 15u
@@ -60,7 +60,8 @@ int gin_session_settings_valid(const struct gin_session_settings *settings);
  * selected route/plain policy; backpressure/broken sink terminates cleanly.
  * stop_on_eof 0 ignores stdin; 1 requires an already nonblocking stdin pipe read
  * end, and only observed zero read stops; any input bytes fail, never commands.
- * No chat FIFO/log I/O, sends, reconnect, history or heartbeat integration.
+ * Selected-window log reception only; no FIFO sends, reconnect or history.
+ * Explicit plain is an operator assertion, not server encryption attestation.
  * SIGINT/TERM defer through existing synchronous startup calls, which can still
  * finish later internal requests. Checks between aggregate phases and bounded
  * service, not a hard absolute latency/aggregate deadline guarantee. Preserve

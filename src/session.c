@@ -5,6 +5,7 @@
 #include "gin_protocol.h"
 #include "gin_topology.h"
 #include "gin_connect.h"
+#include "session_live_projection.h"
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -122,12 +123,12 @@ static int borrow_pipe(int fd, int writing)
     if (writing && fpathconf(fd, _PC_PIPE_BUF) < 6) return -1;
     return fcntl(fd, F_DUPFD_CLOEXEC, 3);
 }
-struct metadata_row { unsigned char *data; size_t length; uint64_t epoch; };
 struct metadata {
     struct gin_connect *connection;
-    struct metadata_row rows[GIN_SESSION_METADATA_ROWS_MAX];
+    struct gin_live_queue *queue;
     size_t count, bytes;
     int count_overflow, bytes_overflow, nomem;
+    int64_t receive_ms;
 };
 /* The codec has already validated JSON. Decode only bounded ASCII strings;
  * escaped key/kind spellings remain equivalent, nested decoys are ignored. */
@@ -136,6 +137,7 @@ static int ascii_string(const unsigned char *p, size_t n, size_t *at,
 {
     size_t used = 0;
     int fits = 1;
+    out[0] = 0;
     if (*at >= n || p[(*at)++] != '"') return 0;
     while (*at < n) {
         unsigned c = p[(*at)++];
@@ -161,7 +163,7 @@ static int ascii_string(const unsigned char *p, size_t n, size_t *at,
     }
     return 0;
 }
-static int query_payload(const unsigned char *p, size_t n)
+static int recognized_payload(const unsigned char *p, size_t n)
 {
     size_t i = 0;
     unsigned depth = 0;
@@ -175,7 +177,16 @@ static int query_payload(const unsigned char *p, size_t n)
                 while (j < n && (p[j] == ' ' || p[j] == '\t' || p[j] == '\n' || p[j] == '\r')) ++j;
                 if (j < n && p[j++] == ':') {
                     while (j < n && (p[j] == ' ' || p[j] == '\t' || p[j] == '\n' || p[j] == '\r')) ++j;
-                    return ascii_string(p,n,&j,value,sizeof(value)) && !strcmp(value,"query_windows_list");
+                    int fits;
+                    value[0] = 0;
+                    fits = ascii_string(p,n,&j,value,sizeof(value));
+                    if (!strncmp(value,"e2e_",4)) return 2;
+                    if (!fits) return 0;
+                    if (!strcmp(value,"query_windows_list")) return 1;
+                    return !strcmp(value,"message") || !strcmp(value,"own_nick_changed") ||
+                        !strcmp(value,"joined") || !strcmp(value,"window_pending") ||
+                        !strcmp(value,"window_invited") || !strcmp(value,"window_invite_declined") ||
+                        !strcmp(value,"join_failed") || !strcmp(value,"kicked") ? 2 : 0;
                 }
             }
             continue;
@@ -186,44 +197,40 @@ static int query_payload(const unsigned char *p, size_t n)
     }
     return 0;
 }
-static void metadata_copy(struct metadata *m, const unsigned char *data,
-    size_t length, uint64_t epoch)
-{
-    struct metadata_row *row;
-    if (m->count >= GIN_SESSION_METADATA_ROWS_MAX) m->count_overflow = 1;
-    if (length > GIN_SESSION_METADATA_BYTES_MAX - m->bytes) {
-        m->bytes_overflow = 1; m->bytes = GIN_SESSION_METADATA_BYTES_MAX;
-    } else m->bytes += length;
-    if (m->count_overflow || m->bytes_overflow || m->nomem) return;
-    row = &m->rows[m->count];
-    row->data = malloc(length);
-    if (!row->data) { m->nomem = 1; return; }
-    memcpy(row->data, data, length);
-    row->length = length; row->epoch = epoch;
-    ++m->count;
-}
 static void metadata_frame(void *context, const struct gin_phoenix_frame *frame, uint64_t epoch)
 {
     struct metadata *m = context;
     const struct gin_phoenix_fields *f = gin_phoenix_frame_fields(frame);
-    const struct gin_connect_topic_status *root = gin_connect_topic_at(m->connection, 0);
-    if (!f || !root || root->state != GIN_CONNECT_TOPIC_JOINED || !epoch ||
-        epoch != gin_connect_last_result(m->connection).socket_epoch ||
-        strcmp(f->topic, root->topic) || strcmp(f->event, "event") ||
-        (f->join_ref && (!root->join_ref || strcmp(f->join_ref, root->join_ref))) ||
-        !query_payload(f->payload.data, f->payload.length)) return;
-    metadata_copy(m,f->payload.data,f->payload.length,epoch);
-}
-static void metadata_clear(struct metadata *m)
-{
+    struct gin_live_view view;
     size_t i;
-    for (i=0; i<m->count; ++i) {
-        volatile unsigned char *p = m->rows[i].data;
-        size_t n = m->rows[i].length;
-        while (n--) *p++ = 0;
-        free(m->rows[i].data);
+    enum gin_live_code code;
+    int recognized;
+    if (!f || strcmp(f->event, "event") || !epoch ||
+        epoch != gin_connect_last_result(m->connection).socket_epoch) return;
+    for (i = 0; i < gin_connect_topic_count(m->connection); ++i) {
+        const struct gin_connect_topic_status *source = gin_connect_topic_at(m->connection, i);
+        if (!source || strcmp(source->topic, f->topic)) continue;
+        if (source->state != GIN_CONNECT_TOPIC_JOINED || !source->join_ref ||
+            !*source->join_ref || (f->join_ref && strcmp(f->join_ref, source->join_ref))) return;
+        recognized = recognized_payload(f->payload.data, f->payload.length);
+        if (!recognized) return;
+        memset(&view, 0, sizeof(view));
+        view.fields = *f; view.source_join_ref = source->join_ref;
+        view.observed_epoch = epoch; view.receive_ms = m->receive_ms; view.source_index = i;
+        view.kind = GIN_LIVE_LIFECYCLE;
+        if (i == 0 && recognized == 1) {
+            view.kind = GIN_LIVE_QUERY_SNAPSHOT;
+            if (++m->count > GIN_SESSION_METADATA_ROWS_MAX) m->count_overflow = 1;
+            if (f->payload.length > GIN_SESSION_METADATA_BYTES_MAX - m->bytes)
+                m->bytes_overflow = 1;
+            else m->bytes += f->payload.length;
+        }
+        if (m->count_overflow || m->bytes_overflow || m->nomem) return;
+        code = gin_live_queue_push(m->queue, &view);
+        if (code == GIN_LIVE_NOMEM) m->nomem = 1;
+        else if (code != GIN_LIVE_OK) m->count_overflow = 1;
+        return;
     }
-    m->count = m->bytes = 0;
 }
 static int owner_stop(struct owner *o, enum gin_session_code *code)
 {
@@ -268,7 +275,11 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
     struct gin_connect *connection = NULL;
     struct metadata metadata;
     struct gin_connect_settings connect_settings;
-    struct gin_connect_subscription subscription;
+    struct gin_connect_subscription subscriptions[2];
+    struct gin_live_projection projection;
+    char subject[GIN_CREDENTIAL_NAME_MAX + 1], own_nick[257] = {0};
+    size_t subscription_count = 1;
+    int output = -1;
     struct gin_name name;
     struct timespec deadline;
     const struct gin_protocol_policy policy = {GIN_SESSION_CLIENT_PROTOCOL, GIN_SESSION_SERVER_MIN};
@@ -315,17 +326,33 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
             code=GIN_SESSION_ROUTE; goto done;
         }
         network_id=network->id;
+        if (network->own_nick) memcpy(own_nick, network->own_nick, strlen(network->own_nick) + 1u);
         window=gin_topology_find_window(topology,network_id,name.canonical_target);
         if (name.kind == GIN_WINDOW_CHANNEL && (!window || window->role != GIN_REMOTE_CHANNEL || !window->joined)) {
             code=GIN_SESSION_ROUTE; goto done;
         }
     }
     { int d=deadline_state(&deadline); if (d) { code=d<0?GIN_SESSION_IO:GIN_SESSION_TIMEOUT; goto done; } }
-    subscription.network=s->local.network; subscription.target=s->local.target;
+    subscriptions[0].network=s->local.network; subscriptions[0].target=s->local.target;
+    if (name.kind == GIN_WINDOW_NONCHANNEL) {
+        struct gin_name own;
+        if (!*own_nick || gin_name_prepare(s->local.network,own_nick,s->local.chantypes,&own) < 0 ||
+            own.kind != GIN_WINDOW_NONCHANNEL) { code=GIN_SESSION_ROUTE; goto done; }
+        subscriptions[1].network=s->local.network; subscriptions[1].target=own_nick;
+        subscription_count=2;
+    }
+    memcpy(subject,credential.subject_name,sizeof(subject));
+    memset(&projection,0,sizeof(projection));
+    projection.settings=s; projection.subject=subject; projection.own_nick=own_nick;
+    projection.network_id=network_id; projection.query=name.kind==GIN_WINDOW_NONCHANNEL;
+    if (gin_live_queue_new(GIN_LIVE_ROWS_MAX,GIN_LIVE_BYTES_MAX,&metadata.queue) != GIN_LIVE_OK) {
+        code=GIN_SESSION_NOMEM; goto done;
+    }
     {
-        enum gin_connect_code cc=gin_connect_new(&connect_settings,&credential,&subscription,1,metadata_frame,&metadata,&connection);
+        enum gin_connect_code cc=gin_connect_new(&connect_settings,&credential,subscriptions,subscription_count,metadata_frame,&metadata,&connection);
         if (cc != GIN_CONNECT_OK) { code=cc==GIN_CONNECT_NOMEM?GIN_SESSION_NOMEM:GIN_SESSION_CONNECTION; goto done; }
     }
+    if (gin_connect_topic_count(connection) > 4u) { code=GIN_SESSION_ROUTE; goto done; }
     metadata.connection=connection; gin_credential_clear(&credential);
     if (owner_stop(&o,&code)) goto done;
     {
@@ -338,6 +365,12 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
         size_t i;
         if (owner_stop(&o,&code)) break;
         if (!ready) { int d=deadline_state(&deadline); if (d) { code=d<0?GIN_SESSION_IO:GIN_SESSION_TIMEOUT; break; } }
+        {
+            struct timespec wall;
+            /* One explicit owner timestamp for the following receive batch. */
+            if (clock_gettime(CLOCK_REALTIME,&wall) < 0 ||
+                !gin_live_receive_ms(&wall,&metadata.receive_ms)) { code=GIN_SESSION_IO; break; }
+        }
         cc=gin_connect_service(connection,GIN_SESSION_SERVICE_MS);
         /* Callback failures are already latched; stop otherwise beats the
          * just-returned aggregate network failure, not an earlier owner error. */
@@ -345,15 +378,38 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
         if (metadata.nomem) { code=GIN_SESSION_NOMEM; break; }
         if (owner_stop(&o,&code)) break;
         if (cc != GIN_CONNECT_OK) { code=GIN_SESSION_CONNECTION; break; }
-        for (i=0; i<metadata.count; ++i) {
+        while (gin_live_queue_count(metadata.queue)) {
+            const struct gin_live_view *view=gin_live_queue_peek(metadata.queue);
             struct gin_topology *next=NULL;
-            enum gin_topology_code tc;
-            if (metadata.rows[i].epoch != gin_connect_last_result(connection).socket_epoch) continue;
-            tc=gin_topology_apply_queries(topology,metadata.rows[i].data,metadata.rows[i].length,&next);
-            if (tc != GIN_TOPOLOGY_OK) { code=tc==GIN_TOPOLOGY_NOMEM?GIN_SESSION_NOMEM:GIN_SESSION_TOPOLOGY; break; }
-            gin_topology_free(topology); topology=next; snapshot_epoch=metadata.rows[i].epoch;
+            struct gin_render_record *record=NULL;
+            int terminal=0;
+            size_t appended=0;
+            if (view->observed_epoch != gin_connect_last_result(connection).socket_epoch) {
+                code=GIN_SESSION_ROUTE; break;
+            }
+            projection.source_target=view->source_index==2 ? s->local.target :
+                view->source_index==3 ? own_nick : NULL;
+            code=gin_live_project(view,&projection,topology,&next,&record,&terminal);
+            if (code==GIN_SESSION_OK && next) {
+                gin_topology_free(topology); topology=next; next=NULL;
+                snapshot_epoch=view->observed_epoch;
+            }
+            gin_topology_free(next);
+            if (code==GIN_SESSION_OK && record) {
+                if (output < 0) {
+                    if (gin_root_init(&o.root,s->local.network,s->local.target,s->local.chantypes)<0 ||
+                        (output=gin_root_output_open(&o.root,s->local.network,s->local.target,s->local.chantypes))<0)
+                        code=GIN_SESSION_IO;
+                }
+                if (code==GIN_SESSION_OK && gin_render_append(output,record,&appended)!=GIN_RENDER_OK)
+                    code=GIN_SESSION_IO;
+            }
+            gin_render_record_free(record);
+            (void)gin_live_queue_drop(metadata.queue);
+            if (code!=GIN_SESSION_OK) break;
+            if (terminal) { code=GIN_SESSION_ROUTE; break; }
         }
-        metadata_clear(&metadata);
+        metadata.count=metadata.bytes=0;
         if (code != GIN_SESSION_OK || owner_stop(&o,&code)) break;
         if (!ready) { int d=deadline_state(&deadline); if (d) { code=d<0?GIN_SESSION_IO:GIN_SESSION_TIMEOUT; break; } }
         if (name.kind == GIN_WINDOW_NONCHANNEL && gin_topology_queries_known(topology)) {
@@ -376,7 +432,8 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
         }
     }
 done:
-    gin_connect_free(connection); metadata_clear(&metadata);
+    gin_connect_free(connection); gin_live_queue_free(metadata.queue);
+    close_owned(&output,&code);
     gin_topology_free(topology); gin_credential_clear(&credential);
     return owner_end(&o,code);
 }

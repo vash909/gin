@@ -30,7 +30,45 @@ static int descriptor_count(void)
 }
 static void prior_handler(int number) { (void)number; }
 #ifdef OWNER_WHITEBOX
+#include "gin_connect.h"
+/* Read-only getter facade isolates callback admission limits. Real HTTPS/WSS
+ * executable tests separately establish authenticated source membership. */
+static int callback_facade;
+static const struct gin_connect_topic_status facade_root = {
+    "grappa:user:Alice", "1", GIN_CONNECT_TOPIC_JOINED
+};
+static size_t callback_topic_count(const struct gin_connect *c)
+{ return callback_facade ? 1u : gin_connect_topic_count(c); }
+static const struct gin_connect_topic_status *callback_topic_at(
+    const struct gin_connect *c, size_t index)
+{ return callback_facade ? (index ? NULL : &facade_root) : gin_connect_topic_at(c, index); }
+static struct gin_connect_result callback_last_result(const struct gin_connect *c)
+{
+    struct gin_connect_result result = {0};
+    if (!callback_facade) return gin_connect_last_result(c);
+    result.socket_epoch = 1;
+    return result;
+}
+#define gin_connect_topic_count callback_topic_count
+#define gin_connect_topic_at callback_topic_at
+#define gin_connect_last_result callback_last_result
 #include "../src/session.c"
+#undef gin_connect_topic_count
+#undef gin_connect_topic_at
+#undef gin_connect_last_result
+static void callback_payload(struct metadata *m, const char *payload)
+{
+    struct gin_phoenix_fields fields = {NULL, NULL, "grappa:user:Alice", "event", {NULL, 0}};
+    struct gin_phoenix_bytes bytes = {NULL, 0};
+    struct gin_phoenix_frame *frame = NULL;
+    fields.payload.data = (const unsigned char *)payload;
+    fields.payload.length = strlen(payload);
+    assert(gin_phoenix_encode(&fields, &bytes) == GIN_PHOENIX_OK);
+    assert(gin_phoenix_decode(bytes.data, bytes.length, &frame) == GIN_PHOENIX_OK);
+    metadata_frame(m, frame, 1);
+    gin_phoenix_frame_free(frame);
+    gin_phoenix_bytes_free(&bytes);
+}
 static void pipe_capabilities(void)
 {
     char base[4096], path[4096], byte;
@@ -101,21 +139,37 @@ static void whitebox(void)
     struct owner o;
     enum gin_session_code code;
     int fds[2], flags;
-    for (i=0;i<sizeof(payloads)/sizeof(payloads[0]);++i)
-        assert(query_payload((const unsigned char *)payloads[i],strlen(payloads[i])) == (i<2));
+    callback_facade = 1;
+    for (i=0;i<sizeof(payloads)/sizeof(payloads[0]);++i) {
+        struct metadata m;
+        memset(&m, 0, sizeof(m));
+        assert(gin_live_queue_new(GIN_LIVE_ROWS_MAX, GIN_LIVE_BYTES_MAX, &m.queue) == GIN_LIVE_OK);
+        callback_payload(&m, payloads[i]);
+        assert(m.count == (i < 2 ? 1u : 0u));
+        assert(!m.count_overflow && !m.bytes_overflow && !m.nomem);
+        gin_live_queue_free(m.queue);
+    }
     {
         struct metadata m;
-        unsigned char *large=calloc(1,600000);
+        const char prefix[] = "{\"kind\":\"query_windows_list\",\"windows\":{},\"padding\":\"";
+        char *large = malloc(600001u);
         assert(large);
-        memset(&m,0,sizeof(m));
-        for (i=0;i<9;++i) metadata_copy(&m,(const unsigned char *)"x",1,1);
-        assert(m.count==8 && m.count_overflow && !m.bytes_overflow);
-        metadata_clear(&m);
-        memset(&m,0,sizeof(m));
-        metadata_copy(&m,large,600000,1); metadata_copy(&m,large,600000,1);
-        assert(m.count==1 && !m.count_overflow && m.bytes_overflow);
-        metadata_clear(&m); free(large);
+        memcpy(large, prefix, sizeof(prefix) - 1u);
+        memset(large + sizeof(prefix) - 1u, 'a', 600000u - (sizeof(prefix) - 1u) - 2u);
+        memcpy(large + 599998u, "\"}", 3u);
+        assert(strlen(large) == 600000u);
+        memset(&m, 0, sizeof(m));
+        assert(gin_live_queue_new(GIN_LIVE_ROWS_MAX, GIN_LIVE_BYTES_MAX, &m.queue) == GIN_LIVE_OK);
+        for (i=0;i<9;++i) callback_payload(&m, payloads[0]);
+        assert(gin_live_queue_count(m.queue) == 8 && m.count_overflow && !m.bytes_overflow);
+        gin_live_queue_free(m.queue);
+        memset(&m, 0, sizeof(m));
+        assert(gin_live_queue_new(GIN_LIVE_ROWS_MAX, GIN_LIVE_BYTES_MAX, &m.queue) == GIN_LIVE_OK);
+        callback_payload(&m, large); callback_payload(&m, large);
+        assert(gin_live_queue_count(m.queue) == 1 && !m.count_overflow && m.bytes_overflow);
+        gin_live_queue_free(m.queue); free(large);
     }
+    callback_facade = 0;
     assert(pipe(fds)==0);
     flags=fcntl(fds[1],F_GETFL); assert(flags>=0);
     assert(fcntl(fds[1],F_SETFL,flags|O_NONBLOCK)==0);

@@ -1,9 +1,9 @@
 # Development
 
-The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The separate
-[production startup owner](SESSION.md) now composes a subscription-only connected
-CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+The [verified-WSS native connection API](CONNECT.md) provides root-first
+subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
+composes verified startup and live selected-window plaintext reception in the
+CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
 interoperability is claimed.
 
 The [isolated discovery and gated-auth APIs](DISCOVERY.md) are exercised by
@@ -142,8 +142,9 @@ All `make check` lanes include them. `GIN_LIVENESS_DRIVER` selects a private
 native driver and `GIN_LIVENESS_PREFIX` supplies an instrumentation wrapper;
 Valgrind runs in the full local and CI gates. Shims are test-only and do not
 qualify real libcurl/TLS behavior; native fixtures cover that separate boundary.
-Production `connect` now composes subscription-only startup; chat integration
-and live Grappa compatibility remain unqualified.
+Production `connect` composes startup and selected-window plaintext reception.
+It does not yet use the native heartbeat/reconnect policy; live Grappa
+compatibility remains unqualified.
 
 ## Owned topology testing
 
@@ -254,10 +255,10 @@ fixtures when behavior changes. Do not import Grappa's runtime source tree or
 auto-regenerate a claimed contract from upstream main. Each future release must
 record the qualification evidence specified in [COMPATIBILITY.md](COMPATIBILITY.md).
 
-The isolated [incoming-event renderer and append API](RENDER.md) projects
-owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
-qualification is claimed.
+The [incoming-event renderer and append API](RENDER.md) produces owned,
+bounded records. The connected owner now uses it for selected-window plaintext
+reception and checked append through its held root, outside transport callbacks.
+Native loopback HTTPS/WSS fixtures are not live Grappa qualification.
 
 Plain-send native tests are part of `make check`: `tests/test_send.py` composes
 a real FIFO, HTTPS and WSS receive path outside callbacks. `GIN_SEND_PREFIX`
@@ -273,3 +274,24 @@ budgets, retaining the separate short silent-deadline case and exact wire/order
 assertions. The local check script and CI include these under Valgrind; CI also
 runs the local root-rejection case in its existing isolated privileged lane.
 See [CONTROL.md](CONTROL.md). `gin run` still cannot execute these commands.
+
+## Connected live-reception fixtures
+
+`test_session_reception.py` exercises the real CLI against synthetic local
+HTTPS/WSS, including selected channel/DM output, source qualification and
+metadata ordering. Like the other session fixtures, it honors
+`GIN_SESSION_BINARY` for the installed executable and `GIN_SESSION_PREFIX` for
+instrumentation; neither is a public runtime mode. Nonselected traffic must not
+produce other output windows. These fixtures do not contact a live Grappa host.
+
+`make check` also runs the copy-owned live queue tests, private clock/argument
+checks, raw/decoded JSON fidelity tests and `test_session_topology_fidelity`.
+The latter requires valid normal controls, then tests 256 isolated Jansson
+allocation-failure positions in each of BOOT, direct query replacement and the
+projection's hidden constructor reparse. Every successful decode must preserve
+original authoritative values; rejection must not publish output. The shared
+evidence checker is allocation-free, bounds depth and checks structure, strings,
+integers, booleans and null; unused real metadata is type-checked only, not a
+claim of exact floating-point value preservation or arbitrary dependency memory
+safety. Local and CI strict Valgrind tails include these tests. No receipt from
+an earlier decoder build qualifies a changed linked decoder or current-head CI.

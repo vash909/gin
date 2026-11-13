@@ -1,9 +1,11 @@
-# Operational startup and session ownership (18.1)
+# Operational startup, live reception and session ownership
 
 `gin connect`, `gin connect-check` and `gin credential-import` are production
 commands backed by the existing native authentication, discovery, topology and
-verified-WSS APIs. This is **subscription-only startup**, not a usable messaging
-client or a beta. The old `init`, `check` and local-only `run` retain their
+verified-WSS APIs. `connect` now receives eligible live plaintext records for
+**only the selected network/window** and appends them to its log. Connected
+FIFO send/control, reconnect and history recovery are not wired in; this is not
+a complete messaging client or a beta. The old `init`, `check` and local-only `run` retain their
 behavior and four-key settings format. No existing invocation silently starts
 network access. Tests use synthetic loopback authorities, not a live Grappa
 server; interoperability remains unqualified.
@@ -101,7 +103,9 @@ unopened but syntactically valid status fd can pass check and fail connect.
 ## One foreground owner and actual READY
 
 The owner acquires one root once and keeps it through all session resources.
-It does not call the old local runtime or initialize/open window FIFOs/logs.
+It does not call the old local runtime or acquire a second root handle. Accepted
+output creates/accesses only the selected window through that held root. Its
+FIFO is not a connected input reader; no other discovered window is projected.
 HTTP initialization/cleanup is explicit and surrounds all users. Effective CA
 selection must be a trusted regular file, not a device/FIFO; a CA inode alias of
 the held lock is refused without opening/closing it. Trusted parents and no
@@ -115,8 +119,11 @@ is offered only in the Phoenix encoded subprotocol, never an upgrade
 Authorization header or URL. Numeric network IDs, exact slugs, original targets,
 canonical targets and local components remain distinct.
 
-The production startup declaration is **C=4, R=4**, the minimal implemented boot
-and session subset, not captured upstream current63 or later history floor36.
+Connected startup and credential-import declare **C=36, R=36**. This conservative
+receive subset requires the pinned protocol-36 `dm_with` evidence, not just the
+protocol-4 `/boot` shape. It does not implement every feature through 36, declare
+captured upstream current63 or wire the native history APIs into this owner.
+Standalone native APIs still take explicit caller policy.
 Checks are independently C>=server minimum and server current>=R, plus the root
 join protocol floor. A higher additive server current version is not rejected
 merely for being newer; an unmet minimum fails before credential use. This is
@@ -127,22 +134,32 @@ autojoin alone or an on-disk filename is insufficient. A requested nonchannel
 may be subscribed pending query evidence, but becomes eligible only after a
 validated full current-epoch root `query_windows_list` proves that exact
 network/canonical QUERY. Boot/own nick never establish a peer. Missing inventory
-is UNKNOWN and times out; known-empty or missing target fails. Ordinary work
-remains disabled throughout. Actual future DM reception additionally needs the
-source-topic/`dm_with` routing qualification in 18.2; a selected subscription
-alone does not prove that route.
+is UNKNOWN and times out. During initial discovery, empty then valid replacement
+may establish the route before readiness; intervening chat is never retroactively
+authorized. Once a valid selected query disappears, the session fails even if a
+later snapshot re-adds it. DM admission also qualifies the planned source topic
+and `dm_with`; a selected subscription or payload target alone is insufficient.
+The exact-deduplicated plan contains at most four topics: root, selected network,
+selected channel/peer and the boot own-nick query topic. Own-nick transport is
+neither peer inventory evidence nor an extra output destination.
 
-Root metadata callbacks validate source/epoch/generation, filter unrelated
-metadata without filling the queue, and copy only recognized query snapshots
-into owned storage (8 rows, aggregate 1MiB). Topology replacement and readiness
-checks occur outside the callback. Both queue dimensions fail closed on overflow.
+Transport admission validates planned source/current JOINED state, correlated
+join reference and socket epoch. Recognized metadata and chat share one
+copy-owned, arrival-ordered queue: at most **64 rows and aggregate 2MiB**, counting
+owned fields and per-row accounting, not payload alone. Unknown metadata is
+filtered without filling that queue. Topology replacement, route checks,
+rendering and filesystem work happen outside the callback. Overflow of either
+queue dimension is terminal. Queue limits differ from the unchanged native
+service quantum of 64 operations/1MiB.
 READY requires a nonzero current epoch, actual `GIN_CONNECT_READY`, **every**
 required correlated topic JOINED, current route eligibility, explicit plain
 policy and observed receive drain. A successful service quantum alone may stop
 at the 64-operation/1MiB budget with unread metadata still buffered. The owner
 requires the native local CURLE_AGAIN observation with no partial TEXT message;
 otherwise it continues bounded service under the same startup deadline. This is
-not an atomic server cut or a promise against later inventory changes. HTTP success, server ACK emission, WSS upgrade and local-runtime READY
+not an atomic server cut or a promise against later inventory changes. READY is
+also not an output transaction: earlier admitted records may already have been
+appended. HTTP success, server ACK emission, WSS upgrade and local-runtime READY
 are not substitutes.
 
 Optional `-R FD` borrows an already nonblocking pipe write end >=3, duplicates
@@ -154,6 +171,21 @@ announcement. No arbitrary stdout/stderr writes occur while owning resources.
 The new CLI commands ignore SIGPIPE for diagnostics; the reusable owner saves/
 restores its caller's signal policy and rejects pre-existing pending SIGPIPE
 before changing it. The library emits only static error codes, never payloads.
+
+## Selected-window output and failure limits
+
+Only eligible records for the selected network/window reach the existing native
+plaintext renderer. Other planned transport topics do not create other logs.
+Output uses descriptor-relative private-window guards and checked append through
+the one held root. Existing bytes/inodes are preserved; no truncate, path repair,
+credential/payload diagnostic dump or automatic migration is attempted.
+
+A rendering, required-subscription, established-query-route or output failure is
+terminal. Checked append accounts for a written prefix: an error can leave that
+prefix in the log. There is no rollback, automatic replay, crash-atomic append,
+durable checkpoint or exactly-once guarantee. Explicit `mode=plain` remains an
+owner assertion; it is not complete encrypted-content detection or server
+attestation, and there is no automatic plaintext downgrade or decryption.
 
 ## Shutdown, EOF and deadline limits
 
@@ -187,12 +219,12 @@ CLI/settings; exit1 is runtime/unsafe-file/credential/TLS/protocol/route/status/
 input/resource/cleanup failure. Stopping does not automatically logout/PART,
 delete credentials or remove/rename any existing logs.
 
-## What remains outside 18.1
+## What remains outside this receive-only owner
 
-All ordinary incoming frames are ignored without chat projection, payload dumps
-or ciphertext display. Existing output bytes/inodes and FIFOs are untouched.
-Message reception/append and full encryption gating are 18.2; FIFO send/control
-integration is 18.3; heartbeat/reconnect/history/restart integration is 18.4.
+FIFO send/control integration is 18.3; heartbeat/reconnect/history/restart
+integration is 18.4. Native adapters for those operations do not make them
+available through `connect`. The owner neither decrypts nor claims complete
+encryption detection; only the explicitly asserted plaintext subset is supported.
 No auto retry or outgoing replay is enabled. Without Phoenix heartbeat policy,
 this step makes **no sustained healthy-session lifetime promise**: server close
 is terminal. There is no live Grappa qualification, E2EE implementation,

@@ -1,6 +1,6 @@
 .TH GIN 1 "November 2026" "gin 0.1.0-dev" "User Commands"
 .SH NAME
-gin \- initialize local files or own a verified Grappa startup session
+gin \- initialize local files or receive a selected Grappa window
 .SH SYNOPSIS
 .B gin \-\-help
 .br
@@ -31,8 +31,9 @@ gin \- initialize local files or own a verified Grappa startup session
 is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
 REST resources and Phoenix Channels events. It is not an IRC client.
 Local init/check/run remain unchanged. Separate connect/connect-check and
-credential-import commands provide subscription-only HTTPS/WSS startup, not
-chat reception, FIFO sending, reconnect, history, E2EE or a beta. Live Grappa
+credential-import commands provide verified HTTPS/WSS startup and live selected-
+window plaintext reception. Connected FIFO sending/control, reconnect, history
+and E2EE remain deferred; this is not a beta. Live Grappa
 interoperability is unqualified.
 .SH COMMANDS
 .TP
@@ -66,7 +67,7 @@ No fork, daemon, installed service or network connection is created.
 .PP
 For each command, each CLI flag may appear at most once. CLI settings override
 file settings regardless of option order. Unknown options/operands are errors.
-.SH CONNECTED STARTUP
+.SH CONNECTED STARTUP AND RECEPTION
 .B gin connect
 [-f SESSION_FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
 [-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-E]
@@ -101,16 +102,32 @@ import uses10000/20000 per-request connect/total limits.
 .PP
 The one foreground owner does fresh config/bound-me/boot, then fresh
 config/bound-me/verified same-authority WSS and correlated required subscriptions.
-Production startup fixes C=4/R=4, independently checking C>=server minimum and
-server current>=R, not captured current63 or history floor36. A selected channel
+Connected startup and credential-import fix C=36/R=36, independently checking
+C>=server minimum and server current>=R. This conservative receive subset needs
+dm_with, not every feature through36 or captured current63. Native APIs remain
+caller-configurable. A selected channel
 requires joined remote evidence; a query additionally requires current complete
 root query inventory. Missing inventory is unknown, not empty or a nick inference.
+The exact-deduplicated plan contains at most four topics: root, selected network,
+selected channel/peer and boot own-nick query. Own-nick transport and a payload
+target alone do not authorize a peer or another output window.
+.PP
+Eligible plaintext records append only to the selected window through the one
+held root, outside callbacks. A copy-owned arrival-ordered metadata/chat queue
+is bounded to64 rows and aggregate2MiB including owned-field/row accounting;
+overflow is terminal. This is separate from the native64-operation/1MiB service
+quantum. Admission qualifies source JOINED state, join reference, socket epoch
+and current selected route; DM routing also checks dm_with. A previously valid
+selected query disappearing is terminal; later re-add does not repair it.
 .PP
 -R requires canonical decimal fd>=3, an already nonblocking pipe write end.
 The owner duplicates without changing inherited flags and writes only READY
 followed by LF after all required joins and route/plain checks. Full/broken pipe,
 short/zero write or exhausted bounded EINTR attempts fails and cleans up. No -R
-means no readiness announcement. No blocking stdio runs while resources are held.
+means no readiness announcement. Readiness also requires actual receive drain,
+not merely a completed service quantum. It is not an output transaction:
+earlier admitted bytes may already be appended. No blocking diagnostic stdio
+runs while resources are held.
 -E explicitly monitors an already nonblocking stdin pipe read end; only zero read
 stops, data fails, HUP alone is not EOF. Without -E stdin is ignored, including
 /dev/null. Neither option is a chat command/input path.
@@ -119,9 +136,11 @@ SIGINT/TERM stop cleanly after existing synchronous aggregate startup calls
 return; later internal requests may still occur before that return. Per-request
 and startup deadlines are not hard wall-clock bounds on files, resolver cleanup
 or scheduling. Service waits at most50ms per quantum. No immediate abort,
-heartbeat/retry, ordinary chat logs, FIFO sends, history or sustained healthy
-session lifetime is promised in this stage. Existing logs/FIFOs/store remain
-unchanged. Teardown frees session/HTTP/children before root release, restores
+heartbeat/retry, FIFO sends, history or sustained healthy-session lifetime is
+promised. Output failures are terminal and can leave a written prefix; no
+rollback, replay, crash-atomic append or durable exactly-once guarantee. Existing
+log bytes/inodes are preserved, not truncated. No extra discovered windows are
+projected. Teardown frees session/HTTP/children before root release, restores
 caller signal policy and never unlinks the persistent lock. API status0 is not
 proof of reaching READY or recipient delivery; errors1/2 retain runtime/config
 meanings. See docs/SESSION.md for the complete contract and limits.
@@ -250,8 +269,9 @@ and uses a monotonic 100ms backoff to avoid HUP spin and support later writers.
 .I ROOT/NETWORK/WINDOW/out
 A regular file with mode 0600, opened with O_APPEND, never O_TRUNC.
 Existing log bytes and inode are preserved on repeated initialization.
-No events or placeholder messages are written. O_APPEND is an open flag,
-not a filesystem append-only attribute.
+Initialization writes no events or placeholders. The connected receive owner
+appends eligible plaintext records only for its selected window. O_APPEND is an
+open flag, not a filesystem append-only attribute.
 .SH SECURITY
 Existing directories and endpoints must have the expected type, exact
 permissions (including no special mode bits), and effective-user ownership.
@@ -304,19 +324,21 @@ unreadable explicit file returns 1 even if effective settings would be missing.
 The installed native CLI includes connect, connect-check, and credential-import
 with verified HTTPS discovery, stored-origin/account-identity checks, and
 /boot plus root-first WSS subscriptions under the connected owner; native
-Phoenix codec and authentication are implemented APIs. Chat projection, message
-sending, reconnection, history, and end-to-end encryption remain deferred.
+Phoenix codec and authentication are implemented APIs. Selected-window live
+plaintext projection is wired in; connected FIFO message/control sending,
+reconnection, history and end-to-end encryption remain deferred.
 .B gin run
 remains local-only with unsupported sending.
 .PP
 run uses POSIX poll and an async-signal-safe self-pipe for SIGINT/SIGTERM.
 The runtime closes input/wake descriptors before releasing the root lock and
-restores previous signal dispositions and mask. Connected startup is
-subscription-only: chat/log projection, sending, automatic reconnection and
-history recovery are not wired into that command. The implemented startup
-policy declares client protocol 4 and requires server protocol 4; this is not
-a claim of all upstream features. No live Grappa revision or recipient delivery
-is qualified.
+restores previous signal dispositions and mask. Connected receive uses explicit
+mode=plain as an owner assertion, not server encryption attestation or complete
+ciphertext detection; there is no plaintext fallback. Sending, automatic
+reconnection and history recovery are not wired into that command. Connected
+policy declares client protocol36 and requires server protocol36, including
+dm_with; this is not a claim of all upstream features. No live Grappa revision
+or recipient delivery is qualified.
 .SH SEE ALSO
 .BR mkfifo (1),
 .BR tail (1),

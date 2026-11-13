@@ -5,13 +5,14 @@
 This is a pinned implementation guide, not live Grappa qualification. The
 repository provides local CLI/filesystem initialization, local-only `run` and a
 separate [production startup owner](SESSION.md) that enrolls private credentials
-and establishes verified correlated subscriptions. It does not yet project chat,
-send from FIFOs, reconnect, recover history or implement E2EE. The
+and establishes verified correlated subscriptions with live selected-window
+plaintext projection. It does not send from FIFOs, reconnect, recover history
+or implement E2EE. The
 [bounded HTTP/TLS API](HTTP.md) remains synchronous outside callbacks. The isolated
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights.
 The isolated [connection API](CONNECT.md) now implements verified WSS and
 root-first subscriptions. The isolated [renderer and append API](RENDER.md)
-projects source-derived incoming records; connected chat projection remains 18.2.
+projects source-derived incoming records through the connected receive owner.
 Separate [account authentication APIs](AUTH.md) implement bounded JSON and
 private credentials outside runtime callbacks. The local input
 limit is not a Grappa limit; see [INPUT.md](INPUT.md).
@@ -66,17 +67,18 @@ The examples are small constructed wire illustrations, not captured sessions.
    standalone resource shapes. Source: `GrappaWeb.MeController.show/2`,
    `GrappaWeb.BootJSON.index/1`, `Grappa.Protocol`.[19][10][2]
 
-Gin's production startup owner requires `/boot` and fixes **C=4 and R=4** for
-its implemented startup subset, with per-feature gates required for later work.
-This is not a claim of all protocol4 features or live interoperability; it does
-not copy captured current63 or later history floor36. Standalone native APIs
-still require explicit caller policy. Track three separate values:
+Gin's connected owner and credential-import fix **C=36 and R=36** for the
+implemented receive subset: `/boot` plus protocol-36 `dm_with` routing evidence.
+This is a conservative pre-beta policy, not a claim that every feature through
+36 is wired in, a copy of captured current63, or live interoperability evidence.
+In particular, native history APIs are not connected recovery. Standalone native
+APIs still require explicit caller policy. Track three separate values:
 
 - Server current protocol `S`, from discovery/join reply.
 - Server minimum accepted client declaration `M`.
 - Gin's implemented declaration `C` and its required server floor `R`.
 
-The intended checks are `C >= M` and `S >= R`, not equality of all versions.
+The connected checks are `C >= M` and `S >= R`, not equality of all versions.
 Feature gates compare `S >= introduction_version`. Never gate on the software
 release string. Current protocol increases on every wire-shape change, including
 additions; the server's minimum is independent. Ignore unknown fields/events
@@ -300,7 +302,7 @@ page means visible drain at that request, not complete original history.
 Read cursors, boot heads and ID jumps do not prove processed/delivered continuity;
 there is no retention watermark, server-generation token or atomic REST/WSS cut.
 Caller-owned output/checkpoint policy remains separate, and append-only files
-cannot reorder previously written logs. The subscription-only connected owner
+cannot reorder previously written logs. The receive-only connected owner
 does not yet schedule history recovery.
 
 ## Encryption boundary: fail closed
@@ -366,4 +368,4 @@ See [CONTROL.md](CONTROL.md) for the closed command grammar, exact REST JOIN/PAR
 query-operation ACK is separate from subscription ACKs and full query snapshots.
 The conservative effective server floor is 4, not the pinned current version 63;
 fixture results do not qualify historical or live server versions. No generic
-server command, inferred membership, replay or connected CLI is introduced.
+server command, inferred membership, replay or connected CLI control verb is introduced.

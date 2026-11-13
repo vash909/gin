@@ -1,4 +1,5 @@
 #include "gin_phoenix.h"
+#include "json_evidence.h"
 #include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,6 +161,9 @@ static enum gin_phoenix_code load_json(const unsigned char *data, size_t length,
     *out = json_loadb((const char *)data, length, JSON_REJECT_DUPLICATES, &error);
     if (!*out) return json_error_code(&error) == json_error_out_of_memory || !error.text[0] ?
         GIN_PHOENIX_NOMEM : GIN_PHOENIX_MALFORMED;
+    if (!gin_json_evidence(data, length, *out)) {
+        json_decref(*out); *out = NULL; return GIN_PHOENIX_MALFORMED;
+    }
     return GIN_PHOENIX_OK;
 }
 
