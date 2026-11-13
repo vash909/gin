@@ -1,9 +1,9 @@
 # Bounded REST/TLS adapter
 
-The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The separate
-[production startup owner](SESSION.md) now composes a subscription-only connected
-CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+The [verified-WSS native connection API](CONNECT.md) provides root-first
+subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
+composes verified startup and live selected-window plaintext reception in the
+CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
 interoperability is claimed.
 
 ## Actual scope

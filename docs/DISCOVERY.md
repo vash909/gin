@@ -1,9 +1,9 @@
 # Isolated HTTP protocol discovery and gated authentication
 
-The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The separate
-[production startup owner](SESSION.md) now composes a subscription-only connected
-CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+The [verified-WSS native connection API](CONNECT.md) provides root-first
+subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
+composes verified startup and live selected-window plaintext reception in the
+CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
 interoperability is claimed.
 
 ## Scope and caller policy
@@ -36,8 +36,9 @@ The source-reviewed endpoint is `ConfigController.show/2` at the full revision
 listed in [PROTOCOL.md](PROTOCOL.md), alongside `Grappa.Protocol` and
 `UserSocket.check_protocol_version/1`. The captured 63/1 values describe that
 upstream revision only, not constants in this low-level discovery API. The
-[startup owner](SESSION.md) supplies `C=4` and `R=4` for its implemented
-`/boot` and root-first WSS subscription subset; see [PROTOCOL.md](PROTOCOL.md).
+[session owner](SESSION.md) and credential-import supply `C=36` and `R=36` for
+their conservative receive subset, including `dm_with`; see
+[PROTOCOL.md](PROTOCOL.md). Native discovery remains caller-configurable.
 It composes verified HTTPS discovery, stored-origin and account-identity checks,
 then topology and WSS acquisition. No live Grappa revision is qualified.
 

@@ -80,7 +80,7 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
         status = 200
         if self.path == '/api/config':
             assert self.headers.get('Authorization') is None, 'credentialed discovery'
-            body = {'server': 'grappa', 'protocol_version': opt.get('protocol', 7),
+            body = {'server': 'grappa', 'protocol_version': opt.get('protocol', 36),
                     'min_protocol_version': opt.get('minimum', 1)}
         elif self.path == '/me':
             assert self.headers.get('Authorization') == 'Bearer ' + TOKEN, 'bad authorization'
@@ -97,7 +97,7 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
                 {'name': '#Room', 'joined': not opt.get('unjoined'), 'source': 'joined'}]
             body = {'networks': [{'id': 3000000001, 'slug': 'NetA', 'nick': 'OwnA'}],
                     'channels': {'NetA': channels}, 'heads': {}}
-        elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=4':
+        elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=36':
             self.upgrade()
             return
         else:
@@ -144,7 +144,8 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
             return result
 
         try:
-            for index in range(3):
+            last_join = 3 if opt.get('query') else 2
+            for index in range(last_join + 1):
                 while True:
                     item = take_client_frame(buffered)
                     if item is not None:
@@ -166,11 +167,11 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
                 srv.joins.append(topic)
                 if index == 0:
                     root_ref, root_topic = jr, topic
-                response = {'protocol_version': opt.get('root_protocol', 7)} if index == 0 else {}
+                response = {'protocol_version': opt.get('root_protocol', 36)} if index == 0 else {}
                 reply = [jr, ref, topic, 'phx_reply', {'status': 'ok', 'response': response}]
                 if index == opt.get('reject_join', -1):
                     reply[4]['status'] = 'error'
-                if index == 2:
+                if index == last_join:
                     if opt.get('wrong_ack'):
                         reply[1] = 'not-the-request'
                     if opt.get('hold_ack'):
@@ -179,10 +180,10 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
                         if srv.stopped.is_set():
                             return
                 wire = packet(reply)
-                if (index == 0 and opt.get('early')) or (index == 2 and not opt.get('early')):
+                if (index == 0 and opt.get('early')) or (index == last_join and not opt.get('early')):
                     wire += metadata()
                 self.connection.sendall(wire)
-                if index == opt.get('reject_join', -1) or (index == 0 and opt.get('root_protocol', 7) < 4):
+                if index == opt.get('reject_join', -1) or (index == 0 and opt.get('root_protocol', 36) < 36):
                     break
             srv.barrier.set()
             while not srv.stopped.is_set():
@@ -427,7 +428,7 @@ class SessionFailures(unittest.TestCase):
             self.assertTrue(store.read_bytes() == before, 'store changed')
 
     def test_discovery_protocol_and_minimum_gate_credentials(self) -> None:
-        for options in [{'protocol': 3}, {'minimum': 5}]:
+        for options in [{'protocol': 3}, {'protocol': 35}, {'protocol': 40, 'minimum': 37}]:
             with self.subTest(options=options), self.fixture(**options) as (srv, origin):
                 self.store(origin)
                 self.quiet(self.run_cli(self.args(origin)), 1)
@@ -504,7 +505,7 @@ class SessionFailures(unittest.TestCase):
                                            (True, [False], 1), (True, [True, False], 1), (False, [True, False], 1),
                                            (False, [False, True], 0), (False, ['other'], 1)]:
             with self.subTest(early=early, snapshots=snapshots), self.fixture(
-                    early=early, snapshots=snapshots) as (srv, origin):
+                    early=early, snapshots=snapshots, query=True) as (srv, origin):
                 self.store(origin)
                 srv.allow_close.set()
                 with self.child(self.args(origin, 'Peer'), srv) as (proc, fd):
@@ -517,7 +518,7 @@ class SessionFailures(unittest.TestCase):
 
     def test_missing_query_snapshot_and_withheld_ack_cannot_publish_ready(self) -> None:
         for hold in [False, True]:
-            with self.subTest(hold=hold), self.fixture(hold_ack=hold) as (srv, origin):
+            with self.subTest(hold=hold), self.fixture(hold_ack=hold, query=True) as (srv, origin):
                 self.store(origin)
                 with self.child(self.args(origin, 'Peer'), srv) as (proc, fd):
                     self.barrier(srv, proc)
@@ -618,7 +619,7 @@ class SessionFailures(unittest.TestCase):
             self.assertEqual(log.stat().st_ino, inode)
             self.assertEqual(log.read_bytes(), b'preserved prefix\n')
             self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                                         '/socket/websocket?vsn=2.0.0&client_proto=4'])
+                                         '/socket/websocket?vsn=2.0.0&client_proto=36'])
 
 
 if __name__ == '__main__':

@@ -1,9 +1,9 @@
 # Architecture
 
-The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The separate
-[production startup owner](SESSION.md) now composes a subscription-only connected
-CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+The [verified-WSS native connection API](CONNECT.md) provides root-first
+subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
+composes verified startup and live selected-window plaintext reception in the
+CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
 interoperability is claimed.
 
 ## Scope and project boundary
@@ -27,14 +27,14 @@ Those numbers describe upstream, not implemented gin support. See
 
 ## What exists versus what is intended
 
-| Area | Implemented scaffold | Intended later |
+| Area | Implemented | Intended later |
 | --- | --- | --- |
-| CLI | Legacy local commands plus explicit `connect`, `connect-check`, private `credential-import` | Messaging integration |
+| CLI | Legacy local commands, explicit connected plaintext receive, read-only `connect-check`, private enrollment | Connected FIFO send/control and recovery |
 | Filesystem | Private directories, FIFO/log, persistent root writer lock and runtime descriptor ownership | Remote lifecycle reconciliation |
 | Input | Bounded C reader API, safe existing-FIFO access and fair poll scheduling | Explicit command grammar and sending |
-| Output | Creates/reuses log; isolated escaped/timestamped renderer and checked append API | Connected runtime integration |
-| Transport | Native HTTPS/WSS account-bound startup composed by a separate foreground owner | Messaging, reception and recovery integration |
-| Runtime | Separate local reader and one-root connected startup owner, no chat projection/send | Live reception, FIFO send, liveness/recovery |
+| Output | Selected-window escaped/timestamped plaintext records, checked append through the held root | Reconnect/history reconciliation |
+| Transport | Native HTTPS/WSS account-bound startup and source-qualified live reception | Connected send/control and recovery integration |
+| Runtime | Separate local reader and one-root connected receive owner with bounded ordered queue | Connected FIFO send, liveness/recovery |
 | Encryption | None | Fail-closed unsupported encrypted operations; separately reviewed future E2EE |
 
 The isolated [REST/TLS API](HTTP.md) is implemented in `src/http.c` /
@@ -47,13 +47,15 @@ Grappa compatibility. The separate
 and server floors before authentication. The isolated [owned topology API](TOPOLOGY.md)
 adds fresh config -> bound identity -> one boot fetch, stable numeric/slug/target
 mapping and pure full-query-snapshot replacement. REST boot leaves query inventory
-unknown; the separate connection API acquires verified WSS subscriptions, while
-runtime projection remains planned.
+unknown; the connection API acquires verified WSS subscriptions, and the
+connected owner consumes current query snapshots before selected-window
+plaintext projection. Legacy local `run` remains separate.
 The isolated [Phoenix v2 TEXT API](PHOENIX.md), in `src/phoenix.c`,
 `src/phoenix_stream.c` and `src/phoenix_refs.c`, adds pure bounded framing,
 explicit-message collection, reply identity helpers and owner-local references.
-It has no sockets, authentication, timers, subscriptions or pending registry and
-is not wired into runtime callbacks. A matching reply is not operation success.
+The pure codec performs no socket, authentication, timer or subscription I/O.
+The connection owner composes it; legacy local `run` is not networked. A matching
+reply is not operation success.
 
 The implemented local CLI boundary is `src/gin.c:main()`, `src/config.c:gin_config_read()`
 and `src/fs.c:gin_validate()` / `gin_init()`, declared in `include/gin_config.h`
@@ -326,7 +328,7 @@ work. No arbitrary IRC, generic RPC or shell execution is exposed.
 [19] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/me_controller.ex
 [21] https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa/session/wire.ex
 
-The isolated [incoming-event renderer and append API](RENDER.md) projects
-owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
-qualification is claimed.
+The [incoming-event renderer and append API](RENDER.md) produces owned,
+bounded records. The connected owner now uses it for selected-window plaintext
+reception and checked append through its held root, outside transport callbacks.
+Native loopback HTTPS/WSS fixtures are not live Grappa qualification.

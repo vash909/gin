@@ -32,7 +32,7 @@ banner(void)
 static void
 usage(void)
 {
-    puts("Usage: gin --help | --version\n"
+    fputs("Usage: gin --help | --version\n"
          "       gin init -d ROOT -n NETWORK -c TARGET\n"
          "       gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
          "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
@@ -76,9 +76,10 @@ usage(void)
          "2 malformed CLI/configuration/effective settings.\n"
          "run holds one root lock and reads one local FIFO in the foreground.\n"
          "SIGINT/SIGTERM stop cleanly. Empty lines are ignored; invalid records\n"
-         "or nonempty complete lines fail with exit 1, without echo or delivery.\n"
-         "Local run has no transport. connect owns one verified HTTPS/WSS session,\n"
-         "not chat reception, FIFO sending, history, reconnects or encryption.\n"
+         "or nonempty complete lines fail with exit 1, without echo or delivery.\n", stdout);
+    puts("Local run has no transport. connect owns verified HTTPS/WSS and receives\n"
+         "selected-window chat into safe logs. No FIFO sending, history, reconnects\n"
+         "or encryption. Connected policy C36/R36; explicit plaintext assertion only.\n"
          "Connected settings add origin/mode/ca_file/connect_ms/total_ms/join_ms/\n"
          "startup_ms; this separate format is not accepted by legacy commands.\n"
          "origin and explicit mode=plain are required; ROOT selects its private\n"

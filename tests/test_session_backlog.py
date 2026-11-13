@@ -43,7 +43,7 @@ class BacklogHandler(base.Handler):
         buffered = bytearray()
         root_topic = ''
         try:
-            for index in range(3):
+            for index in range(4):
                 item = take_client_frame(buffered)
                 while item is None:
                     data = self.connection.recv(16384)
@@ -59,14 +59,14 @@ class BacklogHandler(base.Handler):
                     raise AssertionError('invalid join')
                 srv.joins.append(topic)
                 reply = server_frame(json.dumps([jr, ref, topic, 'phx_reply',
-                    {'status': 'ok', 'response': {'protocol_version': 7} if index == 0 else {}}]).encode())
+                    {'status': 'ok', 'response': {'protocol_version': 36} if index == 0 else {}}]).encode())
                 if index == 0:
                     root_topic = topic
                     snapshot = {'kind': 'query_windows_list', 'windows': {'3000000001': [
                         {'network_id': 3000000001, 'target_nick': 'Peer', 'opened_at': 'now'}]}}
                     self.connection.sendall(reply + (server_frame(json.dumps([None, None, root_topic, 'event', snapshot]).encode())
                         if srv.mode != 'flood' else b''))
-                elif index == 2:
+                elif index == 3:
                     filler = server_frame(json.dumps([None, None, root_topic, 'event', {'kind': 'unrelated'}]).encode())
                     replacement = json.dumps([None, None, root_topic, 'event',
                         {'kind': 'query_windows_list', 'windows': {}}]).encode()
@@ -103,8 +103,8 @@ class BacklogHandler(base.Handler):
                         raise AssertionError('unexpected application operation')
                     item = take_client_frame(buffered)
         except OSError:
-            # Only the deliberate post-third-join client shutdown is tolerated.
-            if not srv.stopped.is_set() and not (srv.client_close_expected.is_set() and len(srv.joins) == 3):
+            # Only the deliberate post-fourth-join client shutdown is tolerated.
+            if not srv.stopped.is_set() and not (srv.client_close_expected.is_set() and len(srv.joins) == 4):
                 raise
         finally:
             self.close_connection = True
@@ -195,9 +195,10 @@ class BacklogTests(unittest.TestCase):
                 for secret in [base.TOKEN.encode(), b'YWF+']:
                     self.assertNotIn(secret, out + err, 'credential disclosed')
                 self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                    '/socket/websocket?vsn=2.0.0&client_proto=4'], 'incomplete startup HTTP flow')
+                    '/socket/websocket?vsn=2.0.0&client_proto=36'], 'incomplete startup HTTP flow')
                 self.assertEqual(srv.joins, ['grappa:user:Alice', 'grappa:user:Alice/network:NetA',
-                    'grappa:user:Alice/network:NetA/channel:peer'], 'missing required subscriptions')
+                    'grappa:user:Alice/network:NetA/channel:peer',
+                    'grappa:user:Alice/network:NetA/channel:owna'], 'missing required subscriptions')
             finally:
                 srv.stopped.set()
                 srv.release_partial.set()

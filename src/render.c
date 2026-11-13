@@ -1,4 +1,5 @@
 #include "gin_render.h"
+#include "json_evidence.h"
 #include "gin_naming.h"
 #include "render_values.h"
 #include "connect_values.h"
@@ -190,6 +191,9 @@ enum gin_render_code gin_render_event(const struct gin_phoenix_frame *frame,
     if (strcmp(f->event, "event")) return GIN_RENDER_IGNORE;
     o = json_loadb((const char *)f->payload.data, f->payload.length, JSON_REJECT_DUPLICATES, &error);
     if (!o) return GIN_RENDER_MALFORMED;
+    if (!gin_json_evidence(f->payload.data, f->payload.length, o)) {
+        json_decref(o); return GIN_RENDER_MALFORMED;
+    }
     memset(&b, 0, sizeof(b)); code = project(o, c, receive_ms, &b); json_decref(o);
     if (code != GIN_RENDER_OK) return code;
     record = malloc(sizeof(*record) + b.length + 1u);

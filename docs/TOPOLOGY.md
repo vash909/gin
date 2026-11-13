@@ -1,8 +1,10 @@
 # Owned network and window topology
 
 `include/gin_topology.h` provides an isolated synchronous fetch API and pure,
-immutable snapshot APIs. These are not connected to `gin run`, subscriptions,
-filesystem projection, or message sending. No live Grappa revision is qualified.
+immutable snapshot APIs. The connected session owner uses these snapshots for
+startup and current query-route evidence before selected-window projection.
+The standalone fetch API does not subscribe, append or send; legacy `gin run`
+remains local-only. No live Grappa revision is qualified.
 The source-reviewed wire reference is Grappa
 `87daa4cca9b41fbd6c5f93cb40d6848193f425f9`; `/boot` requires server protocol >=4.
 This feature floor is not a gin client declaration or an exact-version check.

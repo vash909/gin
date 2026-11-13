@@ -1,4 +1,5 @@
 #include "topology_internal.h"
+#include "json_evidence.h"
 #include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,7 +185,7 @@ static enum gin_topology_code load_json(const unsigned char *b, size_t n, json_t
      * an error message; preserve the library's explicit OOM category too. */
     if (!*out) return json_error_code(&error) == json_error_out_of_memory || !error.text[0] ?
         GIN_TOPOLOGY_NOMEM : GIN_TOPOLOGY_MALFORMED;
-    if (!json_is_object(*out)) {
+    if (!json_is_object(*out) || !gin_json_evidence(b, n, *out)) {
         json_decref(*out); *out = NULL;
         return GIN_TOPOLOGY_MALFORMED;
     }

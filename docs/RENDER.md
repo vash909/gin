@@ -1,8 +1,8 @@
 # Incoming event rendering (isolated native API)
 
 `include/gin_render.h` defines the pure renderer and outside-callback append API.
-Connected session startup does not yet project chat; [18.2](../ROADMAP.md)
-will integrate reception. These APIs do not send, acknowledge, decrypt,
+The connected session owner uses these APIs for selected-window live plaintext
+reception under the [session contract](SESSION.md). These APIs do not send, acknowledge, decrypt,
 reconnect, fetch history or establish live Grappa compatibility.
 
 ## Trusted owner and routing

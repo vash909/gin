@@ -22,20 +22,20 @@ inspired by [ii](https://tools.suckless.org/ii/). Portable C99 and POSIX.1-2008;
 ordinary files and named pipes instead of another chat UI. Supported target
 platforms are Linux (glibc/musl) and FreeBSD.
 
-**Status: subscription-only connected startup, not a messaging client or a beta.**
+**Status: connected plaintext reception for one selected window; not a beta.**
 The executable initializes a private filesystem tree and validates explicit
 CLI/configuration settings. `gin credential-import` explicitly enrolls a bearer
-from a private file; `gin connect` owns a verified HTTPS/WSS session with bound
-identity, topology and correlated subscriptions. It does not receive chat into
-logs, send messages, reconnect or recover history. See the
-[18.1 startup/session contract](docs/SESSION.md). `gin run` remains a local-only
+from a private file; `gin connect` owns verified HTTPS/WSS startup and appends
+eligible live plaintext records to the selected window's log. Connected FIFO
+sending/control, reconnect, history recovery and E2EE remain deferred. See the
+[startup and live-reception contract](docs/SESSION.md). `gin run` remains a local-only
 foreground FIFO reader with orderly signal shutdown and one held root lock.
 It announces transport unavailability and fails with exit 1 on the first
 nonempty complete input; no input is echoed to logs or claimed delivered.
 See [foreground runtime](docs/RUNTIME.md) and the
 [input policy and writer contract](docs/INPUT.md). Without a running reader,
 a shell FIFO writer blocks. REST and Phoenix Channels
-are the planned transport, not direct IRC.
+are the connected transport, not direct IRC.
 
 ## Build and test
 
@@ -76,7 +76,9 @@ See [locking, recovery and API limits](docs/LOCKING.md), including POSIX
 per-process duplicate-close semantics and the trusted-parent assumption.
 
 The intended beta interface from the [original proposal](https://github.com/vjt/grappa-irc/issues/2588)
-is shown below. **This is a design example, not functionality available today:**
+is shown below. **FIFO sending remains a design example, not functionality
+available today.** Live receive already appends the selected output log, which
+can be followed independently with `tail`.
 
 ```sh
 # Future: a running, authenticated gin process must already own the FIFO.
@@ -113,7 +115,7 @@ never argv or ordinary settings. Optional nonblocking-pipe readiness reports
 actual correlated READY; no readiness print is made by default. Existing local
 invocations never silently connect. Read [SESSION.md](docs/SESSION.md) before
 enrollment, including private-file, signal/deadline, plaintext assertion and
-subscription-only limits. Live-server qualification remains a separate opt-in
+receive-only limits. Live-server qualification remains a separate opt-in
 milestone after all four operational-integration steps.
 
 ## Design boundaries
@@ -132,7 +134,8 @@ milestone after all four operational-integration steps.
   explicit-message fragment collection, reply identity matching and local refs;
   the isolated [verified-WSS connection API](docs/CONNECT.md) adds root-first
   correlated subscriptions through libcurl. Session startup is wired into the
-  production CLI; chat projection/send/recovery integration remains future work.
+  production CLI together with selected-window plaintext projection; connected
+  send/control/recovery integration remains future work.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
 - E2EE is deferred, **not TLS**. Encrypted conversations must eventually be
@@ -173,10 +176,10 @@ validation before one bounded REST POST. Real FIFO/HTTPS/WSS fixtures exercise
 composition outside callbacks; `gin run` remains local-only, with no send queue,
 retry or local echo.
 
-The isolated [incoming-event renderer and append API](docs/RENDER.md) projects
-owned, bounded records and supports held-root append outside callbacks. Native
-loopback WSS fixtures exercise it; connected chat projection remains deferred and no live Grappa
-qualification is claimed.
+The [incoming-event renderer and append API](docs/RENDER.md) produces owned,
+bounded records. The connected owner now uses it for selected-window plaintext
+reception and checked append through its held root, outside transport callbacks.
+Native loopback HTTPS/WSS fixtures are not live Grappa qualification.
 
 The opt-in [native liveness API](docs/LIVENESS.md) adds Phoenix heartbeats,
 monotonic deadlines, finite owner-driven reconnect scheduling and fail-closed

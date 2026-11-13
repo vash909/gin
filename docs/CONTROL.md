@@ -2,9 +2,9 @@
 
 ## Scope and ownership
 
-These are isolated C APIs exercised by local FIFO/HTTPS/WSS fixtures, not a
-connected executable. `gin run` remains a local-only reader and does not execute
-these commands. No live Grappa interoperability or recipient delivery is claimed.
+These are isolated control APIs exercised by local FIFO/HTTPS/WSS fixtures,
+not connected command-input handlers. `gin run` remains a local-only reader;
+receive-only `gin connect` does not dispatch these commands. No live Grappa interoperability or recipient delivery is claimed.
 The upstream reference is the retained
 `87daa4cca9b41fbd6c5f93cb40d6848193f425f9` protocol snapshot and its pinned
 [ChannelsController](https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/channels_controller.ex),

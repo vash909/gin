@@ -1,21 +1,23 @@
 # Protocol compatibility and release records
 
-The separate [verified-WSS native connection API](CONNECT.md) adds isolated
-root-first subscriptions through libcurl >=8.23.0. The separate
-[production startup owner](SESSION.md) now composes a subscription-only connected
-CLI; chat reception/send/recovery integration remains deferred. No live Grappa
+The [verified-WSS native connection API](CONNECT.md) provides root-first
+subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
+composes verified startup and live selected-window plaintext reception in the
+CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
 interoperability is claimed.
 
 ## Current status
 
-Gin implements subscription-only connected startup, not a released full chat
-client.
+Gin implements verified connected startup and selected-window plaintext
+reception, not a released full chat client.
 
 - Active documentation baseline: Grappa `87daa4cca9b41fbd6c5f93cb40d6848193f425f9`.
 - Captured upstream protocol: 63; captured upstream server minimum: 1. These
   describe the pinned upstream revision, not the gin declaration.
-- Implemented gin client declaration: `C=4`; required server floor: `R=4` for
-  the [startup-only subset](PROTOCOL.md).
+- Connected gin and credential-import declaration: `C=36`; required server
+  floor: `R=36` for the [receive subset](PROTOCOL.md), including `dm_with`.
+  This is not a promise of every feature through 36; native APIs retain explicit
+  caller policy.
 - Qualified runtime Grappa revisions: **none**.
 - Isolated REST/TLS and account authentication APIs: local HTTP/HTTPS fixtures
   only, including bounded JSON, private credentials and [HTTP discovery with
@@ -25,7 +27,8 @@ client.
   [CONNECT.md](CONNECT.md). See [authentication scope](AUTH.md).
 - The [connected startup owner](SESSION.md) composes verified HTTPS discovery,
   stored-origin and account-identity checks, `/boot`, and root-first WSS
-  subscriptions; chat/log projection, sending and recovery are not wired in.
+  subscriptions and live selected-window plaintext projection. Connected FIFO
+  sending/control and recovery remain unwired.
 - Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
   explicit-message fragment collection and reply/reference fixtures only;
   stricter local reference/object-payload policies are documented there.
@@ -33,7 +36,7 @@ client.
   the separate native connection API owns those transport operations.
 - Published beta/stable releases: **none**.
 
-The implemented startup floor `R=4` in [PROTOCOL.md](PROTOCOL.md) is a policy
+The implemented connected floor `R=36` in [PROTOCOL.md](PROTOCOL.md) is a policy
 choice, not a live compatibility guarantee. Preserved documentation and passing
 local fixtures do not establish live Grappa interoperability or chat delivery.
 
