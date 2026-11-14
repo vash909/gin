@@ -76,13 +76,14 @@ See [locking, recovery and API limits](docs/LOCKING.md), including POSIX
 per-process duplicate-close semantics and the trusted-parent assumption.
 
 The intended beta interface from the [original proposal](https://github.com/vjt/grappa-irc/issues/2588)
-is shown below. **FIFO sending remains a design example, not functionality
-available today.** Live receive already appends the selected output log, which
-can be followed independently with `tail`.
+is available through an explicitly configured, authenticated `gin connect`
+owner. The selected FIFO accepts text and minimal controls while live receive
+appends its output log. Local `gin run` still does not send. See the
+[connected contract](docs/SESSION.md) before using this example.
 
 ```sh
-# Future: a running, authenticated gin process must already own the FIFO.
-echo 'Hello from gin!' > "$HOME/gin/azzurra/grappa/in"
+# A running, authenticated gin connect must already own this selected FIFO.
+printf 'Hello from gin!\n' > "$HOME/gin/azzurra/grappa/in"
 tail -f "$HOME/gin/azzurra/grappa/out"
 ```
 
@@ -115,7 +116,7 @@ never argv or ordinary settings. Optional nonblocking-pipe readiness reports
 actual correlated READY; no readiness print is made by default. Existing local
 invocations never silently connect. Read [SESSION.md](docs/SESSION.md) before
 enrollment, including private-file, signal/deadline, plaintext assertion and
-receive-only limits. Live-server qualification remains a separate opt-in
+FIFO/control, operation-receipt and receive limits. Live-server qualification remains a separate opt-in
 milestone after all four operational-integration steps.
 
 ## Design boundaries
@@ -166,12 +167,12 @@ MIT licensed. Only attributed protocol documentation and its upstream license
 are vendored; no Grappa runtime source is copied or linked. Grappa is an
 independent upstream project; gin is not an official Grappa frontend.
 
-The isolated [minimal window-control APIs](docs/CONTROL.md) add a closed FIFO
+The [minimal window-control APIs](docs/CONTROL.md), composed by `connect`, add a closed FIFO
 command frontend, REST JOIN/PART and one correlated WSS query-opening operation.
 Real FIFO/HTTPS/WSS fixtures exercise them; unsupported commands fail closed,
 `//` escapes literal leading slashes, and `gin run` remains local-only.
 
-The isolated [plain-send native API](docs/SEND.md) adds fresh config and stored-identity
+The [plain-send native API](docs/SEND.md), composed by `connect`, adds fresh config and stored-identity
 validation before one bounded REST POST. Real FIFO/HTTPS/WSS fixtures exercise
 composition outside callbacks; `gin run` remains local-only, with no send queue,
 retry or local echo.

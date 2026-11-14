@@ -39,7 +39,7 @@ usage(void)
          "       gin run   [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
          "       gin connect | connect-check [-f SESSION_FILE] [-d ROOT] [-n NETWORK]\n"
          "           [-c TARGET] [-T CHANTYPES] [-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE]\n"
-         "           [-R NONBLOCK_PIPE_FD] [-E]\n"
+         "           [-R NONBLOCK_PIPE_FD] [-O NONBLOCK_PIPE_FD] [-E]\n"
          "       gin credential-import -d ROOT -e HTTPS_ORIGIN -s PRIVATE_BEARER_FILE\n"
          "           [-a CA_FILE]\n\n"
          "Independent headless file/FIFO frontend for Grappa REST + Phoenix.\n"
@@ -78,8 +78,11 @@ usage(void)
          "SIGINT/SIGTERM stop cleanly. Empty lines are ignored; invalid records\n"
          "or nonempty complete lines fail with exit 1, without echo or delivery.\n", stdout);
     puts("Local run has no transport. connect owns verified HTTPS/WSS and receives\n"
-         "selected-window chat into safe logs. No FIFO sending, history, reconnects\n"
-         "or encryption. Connected policy C36/R36; explicit plaintext assertion only.\n"
+         "selected-window chat into safe logs.\n"
+         "Its FIFO accepts literal text, /join, /part and /query.\n"
+         "Controls retain the selected destination; selected PART ends the owner.\n"
+         "No history, reconnects or encryption. Connected policy C36/R36;\n"
+         "explicit plaintext assertion only.\n"
          "Connected settings add origin/mode/ca_file/connect_ms/total_ms/join_ms/\n"
          "startup_ms; this separate format is not accepted by legacy commands.\n"
          "origin and explicit mode=plain are required; ROOT selects its private\n"
@@ -88,7 +91,12 @@ usage(void)
          "connect-check is lexical/read-only, no root/CA/fd/server probe.\n"
          "-R requires an already nonblocking pipe write fd >=3, reporting READY\\n\n"
          "only after correlated subscriptions and validated route/plain policy.\n"
-         "Backpressure fails cleanly; without -R no readiness print. -E explicitly\n"
+         "Backpressure fails cleanly; without -R no readiness print.\n"
+         "-O requires a separate nonblocking pipe write fd >=3; optional receipts:\n"
+         "OP1 id KIND STATE code (one LF record, max192 bytes, no message text).\n"
+         "PENDING precedes effects; a terminal status is not recipient delivery.\n"
+         "QUERY ACK means acceptance only; no retry/replay. -O does not change -R.\n"
+         "-E explicitly\n"
          "stops on stdin zero-read EOF; stdin must be a nonblocking pipe read end,\n"
          "and any data fails (not commands). Otherwise stdin is ignored.\n"
          "SIGINT/TERM stop after existing synchronous startup phases return; request\n"
@@ -149,7 +157,7 @@ connected_cli(int argc, char **argv)
 {
     enum argument {
         FILE_ARG, ROOT_ARG, NETWORK_ARG, TARGET_ARG, CHANTYPES_ARG,
-        ORIGIN_ARG, MODE_ARG, CA_ARG, STATUS_ARG, SOURCE_ARG, EOF_ARG, ARGUMENTS
+        ORIGIN_ARG, MODE_ARG, CA_ARG, STATUS_ARG, OPERATION_ARG, SOURCE_ARG, EOF_ARG, ARGUMENTS
     };
     const char *values[ARGUMENTS] = {NULL};
     unsigned char seen[ARGUMENTS] = {0};
@@ -157,7 +165,7 @@ connected_cli(int argc, char **argv)
     enum gin_session_code code;
     int importing = strcmp(argv[1], "credential-import") == 0;
     int checking = strcmp(argv[1], "connect-check") == 0;
-    int option, index, status_fd = -1, result;
+    int option, index, status_fd = -1, operation_fd = -1, result;
 
     /* This process owns the new command's diagnostics policy. The library
      * independently saves/restores its caller state. Legacy paths are intact. */
@@ -165,7 +173,7 @@ connected_cli(int argc, char **argv)
         return 1;
     optind = 2;
     opterr = 0;
-    while ((option = getopt(argc, argv, "f:d:n:c:T:e:m:a:R:s:E")) != -1) {
+    while ((option = getopt(argc, argv, "f:d:n:c:T:e:m:a:R:O:s:E")) != -1) {
         switch (option) {
         case 'f': index = FILE_ARG; break;
         case 'd': index = ROOT_ARG; break;
@@ -176,6 +184,7 @@ connected_cli(int argc, char **argv)
         case 'm': index = MODE_ARG; break;
         case 'a': index = CA_ARG; break;
         case 'R': index = STATUS_ARG; break;
+        case 'O': index = OPERATION_ARG; break;
         case 's': index = SOURCE_ARG; break;
         case 'E': index = EOF_ARG; break;
         default: goto invalid_connected;
@@ -219,11 +228,13 @@ connected_cli(int argc, char **argv)
             settings.ca_file[0] ? settings.ca_file : NULL, values[SOURCE_ARG]);
     } else {
         if (!gin_session_settings_valid(&settings) ||
-            (seen[STATUS_ARG] && status_number(values[STATUS_ARG], &status_fd) == -1))
+            (seen[STATUS_ARG] && status_number(values[STATUS_ARG], &status_fd) == -1) ||
+            (seen[OPERATION_ARG] && status_number(values[OPERATION_ARG], &operation_fd) == -1) ||
+            (status_fd >= 0 && status_fd == operation_fd))
             goto invalid_connected;
         if (checking)
             return 0;
-        code = gin_session_run(&settings, status_fd, seen[EOF_ARG] != 0);
+        code = gin_session_run_with_operations(&settings, status_fd, seen[EOF_ARG] != 0, operation_fd);
     }
     if (code == GIN_SESSION_OK)
         return 0;

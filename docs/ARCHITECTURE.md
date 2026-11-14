@@ -76,7 +76,11 @@ from the presence of directories or the word `in`.
 The isolated [plain-send API](SEND.md) accepts explicit owner route/mode and a
 unique local operation ID, performs fresh discovery and bound identity, then one
 REST POST outside all callbacks. It retains one held root and has no runtime
-queue, replay or local echo. `gin run` remains local-only.
+queue, replay or local echo. The [connected owner](SESSION.md) now composes
+selected-FIFO SEND and typed JOIN/PART outside callbacks. QUERY uses the
+existing asynchronous connection slot, blocking new FIFO admission until its
+terminal receipt is taken. Control arguments never replace the selected owner;
+OP1 reporting is optional and separate from READY. `gin run` remains local-only.
 
 ## Implemented local projection
 

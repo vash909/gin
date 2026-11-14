@@ -6,8 +6,8 @@ This is a pinned implementation guide, not live Grappa qualification. The
 repository provides local CLI/filesystem initialization, local-only `run` and a
 separate [production startup owner](SESSION.md) that enrolls private credentials
 and establishes verified correlated subscriptions with live selected-window
-plaintext projection. It does not send from FIFOs, reconnect, recover history
-or implement E2EE. The
+plaintext projection and bounded FIFO SEND/JOIN/PART/QUERY composition. It
+does not reconnect, recover history or implement E2EE. The
 [bounded HTTP/TLS API](HTTP.md) remains synchronous outside callbacks. The isolated
 [HTTP discovery and gated-auth APIs](DISCOVERY.md) perform fresh preflights.
 The isolated [connection API](CONNECT.md) now implements verified WSS and
@@ -302,7 +302,7 @@ page means visible drain at that request, not complete original history.
 Read cursors, boot heads and ID jumps do not prove processed/delivered continuity;
 there is no retention watermark, server-generation token or atomic REST/WSS cut.
 Caller-owned output/checkpoint policy remains separate, and append-only files
-cannot reorder previously written logs. The receive-only connected owner
+cannot reorder previously written logs. The connected owner
 does not yet schedule history recovery.
 
 ## Encryption boundary: fail closed
