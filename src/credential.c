@@ -1,4 +1,5 @@
 #include "gin_credential.h"
+#include "json_evidence.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <jansson.h>
@@ -219,7 +220,8 @@ gin_credential_load(const struct gin_root *r, const char *origin,
     if (used > GIN_CREDENTIAL_FILE_MAX || attempts >= GIN_CREDENTIAL_FILE_MAX + 128 ||
         !flat_json(buffer, used)) goto done;
     object = json_loadb(buffer, used, JSON_REJECT_DUPLICATES, NULL);
-    if (!json_is_object(object) || json_object_size(object) != 5) goto done;
+    if (!json_is_object(object) || json_object_size(object) != 5 ||
+        !gin_json_evidence((const unsigned char *)buffer, used, object)) goto done;
     version = json_object_get(object, "version");
     if (!json_is_integer(version) || json_integer_value(version) != 1 ||
         !copy_field(object, "origin", v->origin, sizeof(v->origin)) ||

@@ -5,8 +5,9 @@
 The separate connected `connect`, read-only `connect-check` and private
 `credential-import` commands use a different settings format. See
 [operational startup/session](SESSION.md) for the complete grammar, private
-store selection, C4/R4 policy, readiness pipe and deferred cancellation limits.
-They do not enable chat logs, FIFO sends, automatic reconnect or history.
+store selection, C36/R36 policy, readiness/operation pipes and deferred
+cancellation limits. `connect` receives selected-window logs and dispatches
+FIFO SEND/JOIN/PART/QUERY. Automatic reconnect and history remain unwired.
 
 The remainder of this document describes the legacy local commands.
 

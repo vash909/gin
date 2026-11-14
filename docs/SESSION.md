@@ -1,11 +1,11 @@
 # Operational startup, live reception and session ownership
 
 `gin connect`, `gin connect-check` and `gin credential-import` are production
-commands backed by the existing native authentication, discovery, topology and
-verified-WSS APIs. `connect` now receives eligible live plaintext records for
-**only the selected network/window** and appends them to its log. Connected
-FIFO send/control, reconnect and history recovery are not wired in; this is not
-a complete messaging client or a beta. The old `init`, `check` and local-only `run` retain their
+commands backed by the native authentication, discovery, topology and verified
+WSS APIs. `connect` appends eligible live plaintext records for **only the
+selected network/window**, reads its FIFO and dispatches SEND/JOIN/PART/QUERY.
+Reconnect and history recovery remain unwired; this is not a beta or complete
+messaging client. The old `init`, `check` and local-only `run` retain their
 behavior and four-key settings format. No existing invocation silently starts
 network access. Tests use synthetic loopback authorities, not a live Grappa
 server; interoperability remains unqualified.
@@ -14,15 +14,19 @@ server; interoperability remains unqualified.
 
 ```text
 gin connect [-f SESSION_FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
-            [-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-E]
-gin connect-check [same options]
+            [-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-O OP_FD] [-E]
+gin connect-check [same options; lexical validation only]
 gin credential-import -d ROOT -e HTTPS_ORIGIN -s PRIVATE_BEARER_FILE [-a CA_FILE]
 ```
 
 Flags may occur once, take no positional operands and do not read implicit
 configuration or credential environment variables. `-E` is the only flag without
 an argument. Relative paths use the invocation cwd, not the settings directory.
-CLI strings are not trimmed. `-R` takes canonical decimal fd numbers >=3.
+CLI strings are not trimmed. `-R` and `-O` take canonical decimal fd numbers
+>=3 and must differ when both are supplied. `connect-check` checks this syntax
+but does not probe descriptors. At runtime both require already nonblocking
+pipes with write capability; they are borrowed/duplicated close-on-exec without
+changing caller flags. `-O` additionally requires actual PIPE_BUF >=192.
 
 `ROOT` also selects exactly one private store, `ROOT/.gin.credentials`, for one
 exact origin and account. There is no second root, arbitrary store filename,
@@ -102,14 +106,16 @@ unopened but syntactically valid status fd can pass check and fail connect.
 
 ## One foreground owner and actual READY
 
-The owner acquires one root once and keeps it through all session resources.
-It does not call the old local runtime or acquire a second root handle. Accepted
-output creates/accesses only the selected window through that held root. Its
-FIFO is not a connected input reader; no other discovered window is projected.
-HTTP initialization/cleanup is explicit and surrounds all users. Effective CA
-selection must be a trusted regular file, not a device/FIFO; a CA inode alias of
-the held lock is refused without opening/closing it. Trusted parents and no
-hostile same-UID namespace changes remain caller obligations.
+The owner is fixed to one selected root/network/window. It acquires one root
+once, retains the credential and keeps that root through all session resources.
+Before READY it initializes the selected window if needed and opens its FIFO
+reader. Existing logs are preserved; a missing selected log is created empty.
+It does not call the old local runtime or acquire a second root handle. Other
+discovered windows and control arguments do not create additional output trees.
+HTTP initialization/cleanup surrounds all users. A configured CA must be a
+trusted regular file, not a device/FIFO; a CA inode alias of the held lock is
+refused without opening/closing it. Trusted parents and no hostile same-UID
+namespace changes remain caller obligations.
 
 Startup performs fresh config -> UUID-bound `/me` -> `/boot`, then connection
 start separately repeats fresh config -> bound `/me` -> same-authority verified
@@ -167,7 +173,7 @@ it close-on-exec and preserves caller flags. After that predicate it attempts
 one fixed `READY\n` record within the actual PIPE_BUF; retries on EINTR are
 bounded. Full/broken pipe, zero or short progress is terminal, not an unbounded
 spin or silent success. No status fd means internally READY without a textual
-announcement. No arbitrary stdout/stderr writes occur while owning resources.
+announcement. This pipe is READY-only and unchanged; operation reporting uses `-O` only. No arbitrary stdout/stderr writes occur while owning resources.
 The new CLI commands ignore SIGPIPE for diagnostics; the reusable owner saves/
 restores its caller's signal policy and rejects pre-existing pending SIGPIPE
 before changing it. The library emits only static error codes, never payloads.
@@ -187,22 +193,93 @@ durable checkpoint or exactly-once guarantee. Explicit `mode=plain` remains an
 owner assertion; it is not complete encrypted-content detection or server
 attestation, and there is no automatic plaintext downgrade or decryption.
 
+## Connected FIFO, controls and OP1
+
+Submit complete LF-terminated records in single atomic writes, within both the
+actual PIPE_BUF and [input](INPUT.md)/[command](CONTROL.md) bounds. Literal text
+is SEND; the closed grammar also accepts `/join CHANNEL`, `/part CHANNEL` and
+`/query NICK`. `//` escapes a leading slash. There is no raw command passthrough,
+PART reason or multiple-target expansion. Invalid/unsupported records terminate
+the owner; empty records are ignored. No local echo or implicit retry occurs.
+
+One bounded framing quantum runs per turn after WSS service, full owned-queue
+projection and current receive drain, never through unfinished TEXT. A pending
+query blocks further FIFO admission until its correlated terminal receipt is
+taken. Commands do not replace the selected destination.
+
+SEND uses the original selected wire target/role. SEND/JOIN/PART run fresh
+anonymous config, UUID-bound `/me` and one typed HTTP mutation outside callbacks,
+using the explicit plaintext assertion. JOIN/PART retain the original argument
+and exact selected network slug; `202 {"ok":true}` is accepted pending membership,
+not observed membership. A PART matching the selected canonical channel ends
+the owner after its terminal report, without executing buffered following text.
+Other JOIN/PART operations keep the same selected owner.
+
+QUERY uses the existing asynchronous user-root `open_query_window` WSS operation
+with the topology's numeric network ID and explicit PLAIN assertion. There is no
+HTTP query endpoint or new local log/subscription/window on ACK alone. `join_ms`
+also bounds the query from enqueue (1..60000 ms). ACK means acceptance only,
+not inventory or delivery. Native query expiry fails the connection; the query
+receipt still reports UNCERTAIN with TIMEOUT code 9. Error may follow effects.
+
+### Optional operation receipts: `-O FD`
+
+The separate nonblocking pipe receives bounded, payload-free LF records:
+
+```text
+OP1 <decimal-id> <KIND> <STATE> <decimal-code>
+```
+
+IDs are nonzero, increasing per run, never wrap and are not persistent. Code is
+<=65535 and belongs to the kind's native enum, not HTTP status. Decimal fields
+have no sign or leading zeros except code 0. Records are at most 192 bytes
+including LF and exclude targets, text, credentials, URLs, refs and timestamps.
+
+A valid operation publishes PENDING before preflight/submission and attempts at
+most one terminal publication. Invalid input instead reports INPUT REJECTED,
+without PENDING. Empty records produce no receipt. Without `-O`, the same
+functional operations run without OP1 output; `-R` remains READY-only.
+
+Allowed states, in addition to PENDING, are:
+
+- INPUT: REJECTED only (no PENDING).
+- SEND: NOT_ATTEMPTED, ACCEPTED_PERSISTED, ACCEPTED_NO_PERSIST,
+  REMOTE_FAILURE or UNCERTAIN.
+- JOIN/PART: NOT_ATTEMPTED, ACCEPTED_PENDING, REMOTE_FAILURE or UNCERTAIN.
+- QUERY: NOT_ATTEMPTED, ACCEPTED_ACK, REMOTE_FAILURE, NOT_SENT or UNCERTAIN.
+
+Local/pre-enqueue rejection is NOT_ATTEMPTED. After query enqueue, abortive close
+preserves NOT_SENT if no bytes were written, otherwise UNCERTAIN; it never
+relabels uncertain effects as not attempted. A pending query is closed and its
+receipt taken/reported before connection free. The primary owner result remains
+primary; publication failure makes an otherwise graceful stop fail.
+
+Publication uses bounded nonblocking attempts, including bounded EINTR retries.
+There is no receipt queue or backpressure wait. Failed PENDING publication aborts
+before the operation; failed terminal publication cannot roll back effects.
+Acceptance states do not promise recipient delivery, durable exactly-once
+processing or safe automatic resend.
+
 ## Shutdown, EOF and deadline limits
 
 SIGINT/SIGTERM request orderly stop. Handlers only set a flag and write an
-errno-preserving nonblocking wake byte. Existing synchronous aggregate fetch/
-start APIs are **not immediately cancellable**: later internal requests can
-still occur before the function returns. The owner checks stop and monotonic
-startup policy between aggregate phases and after each service call. A 50ms
-maximum service wait is a scheduling quantum, not a hard duration guarantee.
-Request/startup thresholds do not bound filesystem stalls, resolver-thread
-cleanup, OS scheduling or library teardown in hard realtime.
+errno-preserving nonblocking wake byte. Existing synchronous aggregate fetch,
+start and send/control APIs are **not immediately cancellable**: later internal
+requests can occur before an entered aggregate returns. The owner checks stop
+between phases, after service and again after PENDING before HTTP/query
+submission. This deterministic boundary is not atomic network cancellation.
+The 50ms service wait is a scheduling quantum, not a hard duration guarantee.
+Deadlines do not bound filesystem stalls, resolver cleanup or scheduling.
 
-Without `-E`, stdin is ignored, including `/dev/null`. Explicit `-E` requires
-an already nonblocking stdin pipe read end: only an observed zero-byte read is
-an orderly stop. Buffered data fails with a fixed unsupported-input error; HUP
-alone is not EOF. This is not a message/command pipe. Inherited descriptor flags
-are not changed. There is no chat FIFO reader in this milestone.
+Without `-E`, stdin is ignored, including `/dev/null`. Explicit `-E` requires an
+already nonblocking stdin pipe read end: only an observed zero-byte read is an
+orderly stop. Buffered data fails; HUP alone is not EOF. Stdin is not a command
+pipe and its descriptor flags are unchanged.
+
+Clean FIFO writer EOF is different: the owner retains its reader and applies a
+checked 100ms monotonic cooldown, without close/reopen or busy-spinning. A partial
+record at EOF is rejected as invalid input and terminates the owner; it is not
+joined to a later writer's bytes.
 
 Teardown frees transport, snapshots and owned metadata, clears owned credential
 copies, cleans HTTP, closes children, restores signal actions, releases the root and finally
@@ -219,13 +296,12 @@ CLI/settings; exit1 is runtime/unsafe-file/credential/TLS/protocol/route/status/
 input/resource/cleanup failure. Stopping does not automatically logout/PART,
 delete credentials or remove/rename any existing logs.
 
-## What remains outside this receive-only owner
+## What remains outside this owner
 
-FIFO send/control integration is 18.3; heartbeat/reconnect/history/restart
-integration is 18.4. Native adapters for those operations do not make them
-available through `connect`. The owner neither decrypts nor claims complete
-encryption detection; only the explicitly asserted plaintext subset is supported.
-No auto retry or outgoing replay is enabled. Without Phoenix heartbeat policy,
-this step makes **no sustained healthy-session lifetime promise**: server close
-is terminal. There is no live Grappa qualification, E2EE implementation,
-exactly-once persistence, recipient-delivery guarantee or beta release claim.
+Heartbeat/reconnect/history/restart integration is 18.4 and remains unwired.
+Native adapters do not enable these features through `connect`. The owner does
+not decrypt or claim complete encrypted-content detection; only the explicit
+plaintext subset is supported. No auto retry or outgoing replay is enabled.
+Without Phoenix heartbeat policy, there is **no sustained healthy-session
+lifetime promise**: server close is terminal. There is no live qualification,
+E2EE, exactly-once persistence, recipient-delivery guarantee or beta claim.

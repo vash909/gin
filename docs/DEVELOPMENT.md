@@ -208,6 +208,16 @@ local-only input, not sending. `tests/test_runtime.py` and its test-only C
 consumer run in every make check path. See [RUNTIME.md](RUNTIME.md) for the
 callback API, CPU/resource tests, EOF policy and signal ownership contract.
 
+## Connected FIFO integration checks
+
+The real CLI fixtures `test_session_outbound.py`, `test_session_controls.py` and
+`test_session_query.py` exercise same-process SEND/JOIN/PART/QUERY with verified
+local HTTPS/WSS and continued selected-window reception. Operation receipts,
+partial-TEXT admission and actual-owner clock/stop seams have separate fixtures.
+Native make check and strict Valgrind run these checks; setup and connected
+invocations honor the binary/instrumentation overrides. Tests use synthetic
+accounts, not live services, membership or recipient-delivery evidence.
+
 ## GitHub workflow
 
 Work on a branch and open a PR. Main requires a PR and the successful `gate`

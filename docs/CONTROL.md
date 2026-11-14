@@ -2,9 +2,12 @@
 
 ## Scope and ownership
 
-These are isolated control APIs exercised by local FIFO/HTTPS/WSS fixtures,
-not connected command-input handlers. `gin run` remains a local-only reader;
-receive-only `gin connect` does not dispatch these commands. No live Grappa interoperability or recipient delivery is claimed.
+These native control APIs are composed by the [connected owner](SESSION.md)
+from its selected FIFO: synchronous REST JOIN/PART and asynchronous WSS QUERY.
+Control arguments do not change the selected destination or create local windows
+on acceptance alone. Selected PART reports its outcome and ends the owner.
+`gin run` remains a local-only reader. Local FIFO/HTTPS/WSS fixtures claim no
+live Grappa interoperability or recipient delivery.
 The upstream reference is the retained
 `87daa4cca9b41fbd6c5f93cb40d6848193f425f9` protocol snapshot and its pinned
 [ChannelsController](https://github.com/vjt/grappa-irc/blob/87daa4cca9b41fbd6c5f93cb40d6848193f425f9/lib/grappa_web/controllers/channels_controller.ex),

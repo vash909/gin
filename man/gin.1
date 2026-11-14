@@ -1,6 +1,6 @@
 .TH GIN 1 "November 2026" "gin 0.1.0-dev" "User Commands"
 .SH NAME
-gin \- initialize local files or receive a selected Grappa window
+gin \- initialize local files or connect a selected Grappa window
 .SH SYNOPSIS
 .B gin \-\-help
 .br
@@ -32,7 +32,7 @@ is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
 REST resources and Phoenix Channels events. It is not an IRC client.
 Local init/check/run remain unchanged. Separate connect/connect-check and
 credential-import commands provide verified HTTPS/WSS startup and live selected-
-window plaintext reception. Connected FIFO sending/control, reconnect, history
+window plaintext reception with FIFO SEND/JOIN/PART/QUERY. Reconnect, history
 and E2EE remain deferred; this is not a beta. Live Grappa
 interoperability is unqualified.
 .SH COMMANDS
@@ -70,7 +70,7 @@ file settings regardless of option order. Unknown options/operands are errors.
 .SH CONNECTED STARTUP AND RECEPTION
 .B gin connect
 [-f SESSION_FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]
-[-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-E]
+[-e HTTPS_ORIGIN] [-m plain] [-a CA_FILE] [-R STATUS_FD] [-O OP_FD] [-E]
 .PP
 .B gin connect-check
 accepts the same grammar, but validates only safe settings and effective lexical
@@ -132,11 +132,30 @@ runs while resources are held.
 stops, data fails, HUP alone is not EOF. Without -E stdin is ignored, including
 /dev/null. Neither option is a chat command/input path.
 .PP
-SIGINT/TERM stop cleanly after existing synchronous aggregate startup calls
+Before READY the selected FIFO reader and safe output are initialized, preserving
+existing logs. Complete LF records within input and actual PIPE_BUF bounds
+dispatch literal SEND or typed /join CHANNEL, /part CHANNEL and /query NICK.
+Controls do not change the selected destination. Selected PART reports its
+outcome and terminates without executing buffered following input. JOIN/PART
+acceptance is pending membership; QUERY ACK is acceptance, not inventory or
+delivery. A pending query blocks new FIFO admission.
+.PP
+-O optionally borrows a separate nonblocking pipe write fd>=3, with actual
+PIPE_BUF>=192, preserving caller flags. Each payload-free LF record has grammar
+OP1 id KIND STATE code, at most192 bytes including LF. IDs increase per run;
+codes belong to native enums, not HTTP status. Valid operations publish PENDING
+before effects and attempt at most one terminal report. Invalid input instead
+reports INPUT REJECTED and ends the owner; empty input is ignored. Full/broken
+receipt sinks fail without waiting or replay; terminal failure cannot undo
+effects. No -O means no OP1 output; -R stays READY-only and -E stays stdin-only.
+Clean FIFO writer EOF retains the reader with a checked100ms cooldown, not an
+owner stop. Partial EOF input is rejected. No local echo or retry is enabled.
+.PP
+SIGINT/TERM stop cleanly after existing synchronous aggregate startup/send/control calls
 return; later internal requests may still occur before that return. Per-request
 and startup deadlines are not hard wall-clock bounds on files, resolver cleanup
 or scheduling. Service waits at most50ms per quantum. No immediate abort,
-heartbeat/retry, FIFO sends, history or sustained healthy-session lifetime is
+heartbeat/retry, history or sustained healthy-session lifetime is
 promised. Output failures are terminal and can leave a written prefix; no
 rollback, replay, crash-atomic append or durable exactly-once guarantee. Existing
 log bytes/inodes are preserved, not truncated. No extra discovered windows are
@@ -325,7 +344,7 @@ The installed native CLI includes connect, connect-check, and credential-import
 with verified HTTPS discovery, stored-origin/account-identity checks, and
 /boot plus root-first WSS subscriptions under the connected owner; native
 Phoenix codec and authentication are implemented APIs. Selected-window live
-plaintext projection is wired in; connected FIFO message/control sending,
+plaintext projection and FIFO message/control sending are wired in;
 reconnection, history and end-to-end encryption remain deferred.
 .B gin run
 remains local-only with unsupported sending.
@@ -334,7 +353,7 @@ run uses POSIX poll and an async-signal-safe self-pipe for SIGINT/SIGTERM.
 The runtime closes input/wake descriptors before releasing the root lock and
 restores previous signal dispositions and mask. Connected receive uses explicit
 mode=plain as an owner assertion, not server encryption attestation or complete
-ciphertext detection; there is no plaintext fallback. Sending, automatic
+ciphertext detection; there is no plaintext fallback. Automatic
 reconnection and history recovery are not wired into that command. Connected
 policy declares client protocol36 and requires server protocol36, including
 dm_with; this is not a claim of all upstream features. No live Grappa revision

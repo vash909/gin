@@ -1,11 +1,10 @@
-# Isolated plain-message sending
+# Plain-message sending
 
 `include/gin_send.h` exposes `gin_send_plain()`, a bounded **synchronous native
-API**. It is not wired into local `gin run` or receive-only `gin connect`;
-FIFO-send integration remains 18.3. Never invoke
-this adapter from a runtime, network or renderer callback. The native integration
-fixture owns the FIFO and explicitly calls the adapter outside all callbacks;
-this is not a new asynchronous runtime or a live Grappa qualification.
+API**. The [connected owner](SESSION.md) dispatches selected-FIFO SEND through
+this adapter outside callbacks; local `gin run` still does not send. Never invoke
+the adapter from a runtime, network or renderer callback. Native and connected
+fixtures use synthetic authorities; this is not live Grappa qualification.
 
 ## Ownership and local policy
 

@@ -1,4 +1,5 @@
 #include "gin_connect.h"
+#include "json_evidence.h"
 #include "gin_liveness.h"
 #include "liveness_values.h"
 #include "connect_values.h"
@@ -600,7 +601,7 @@ static enum gin_connect_code receive_frame(struct gin_connect *s, struct gin_pho
             JSON_REJECT_DUPLICATES, NULL);
         json_t *kind = payload ? json_object_get(payload, "kind") : NULL;
         json_t *code = payload ? json_object_get(payload, "code") : NULL;
-        int parsed = payload != NULL;
+        int parsed = gin_json_evidence(f->payload.data, f->payload.length, payload);
         int known = json_is_string(kind) && !strcmp(json_string_value(kind), "web_session_severed");
         int invalid = known && !json_is_string(code);
         int expired = known && json_is_string(code) && !strcmp(json_string_value(code), "rate_limit_flood");
@@ -618,7 +619,8 @@ static enum gin_connect_code receive_frame(struct gin_connect *s, struct gin_pho
             if (s->pending == 0) {
                 json_t *root = json_loadb((const char *)r->response.data, r->response.length, JSON_REJECT_DUPLICATES, NULL);
                 json_t *v = root ? json_object_get(root, "protocol_version") : NULL;
-                int valid = json_is_integer(v) && json_integer_value(v) > 0 &&
+                int valid = gin_json_evidence(r->response.data, r->response.length, root) &&
+                    json_is_integer(v) && json_integer_value(v) > 0 &&
                     json_integer_value(v) <= INT_MAX && json_integer_value(v) >= s->settings.policy.required_server_protocol;
                 if (valid) s->root_protocol = (int)json_integer_value(v);
                 json_decref(root);

@@ -5,8 +5,14 @@
 #include "gin_protocol.h"
 #include "gin_topology.h"
 #include "gin_connect.h"
+#include "gin_input.h"
+#include "gin_command.h"
+#include "gin_send.h"
+#include "gin_control.h"
+#include "session_operation.h"
 #include "session_live_projection.h"
 #include <time.h>
+#include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -20,7 +26,7 @@ static volatile sig_atomic_t session_stopping;
 static volatile sig_atomic_t session_wake = -1;
 struct owner {
     struct gin_root root;
-    int wake[2], status, input, installed, masked, http;
+    int wake[2], status, input, fifo, operations, installed, masked, http;
     sigset_t blocked, saved_mask;
     struct sigaction saved_int, saved_term, saved_pipe;
 };
@@ -45,7 +51,7 @@ static void owner_init(struct owner *o)
 {
     memset(o, 0, sizeof(*o));
     o->root.rootfd = o->root.lockfd = -1;
-    o->wake[0] = o->wake[1] = o->status = o->input = -1;
+    o->wake[0] = o->wake[1] = o->status = o->input = o->fifo = o->operations = -1;
 }
 static enum gin_session_code owner_begin(struct owner *o)
 {
@@ -91,6 +97,7 @@ static enum gin_session_code owner_end(struct owner *o, enum gin_session_code co
 {
     if (o->http) gin_http_global_cleanup();
     close_owned(&o->status, &code); close_owned(&o->input, &code);
+    close_owned(&o->fifo, &code); close_owned(&o->operations, &code);
     if (o->masked && sigprocmask(SIG_BLOCK, &o->blocked, NULL) < 0 &&
         code == GIN_SESSION_OK) code = GIN_SESSION_CLEANUP;
     if (o->installed >= 3 && sigaction(SIGPIPE, &o->saved_pipe, NULL) < 0 &&
@@ -245,6 +252,22 @@ static int owner_stop(struct owner *o, enum gin_session_code *code)
     }
     return 0;
 }
+static int fifo_deadline_start(struct timespec *deadline)
+{
+    uintmax_t maximum = (time_t)-1 > 0 ? (uintmax_t)(time_t)-1 :
+        UINTMAX_MAX >> (sizeof(uintmax_t) * CHAR_BIT - sizeof(time_t) * CHAR_BIT + 1);
+    struct timespec now;
+    uintmax_t carry;
+    long ns;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0 || now.tv_sec < 0 ||
+        now.tv_nsec < 0 || now.tv_nsec >= 1000000000) return -1;
+    ns = now.tv_nsec + 100000000;
+    carry = ns >= 1000000000 ? 1u : 0u;
+    if ((uintmax_t)now.tv_sec > maximum - carry) return -1;
+    deadline->tv_sec = (time_t)((uintmax_t)now.tv_sec + carry);
+    deadline->tv_nsec = ns - (carry ? 1000000000 : 0);
+    return 0;
+}
 static int deadline_state(const struct timespec *deadline)
 {
     struct timespec now;
@@ -264,8 +287,59 @@ static enum gin_session_code publish_ready(struct owner *o)
     }
     return GIN_SESSION_STATUS;
 }
+static enum gin_session_code publish_operation(struct owner *o, uint64_t id,
+    enum gin_operation_kind kind, enum gin_operation_state state, unsigned reason)
+{
+    struct gin_operation_event event;
+    char record[GIN_OPERATION_RECORD_MAX + 1u];
+    size_t length = 0;
+    unsigned attempt;
+    if (o->operations < 0) return GIN_SESSION_OK;
+    event.id=id; event.kind=kind; event.state=state; event.code=reason;
+    if (!gin_operation_format(&event,record,sizeof(record),&length))
+        return GIN_SESSION_OPERATION;
+    for (attempt=0; attempt<3; ++attempt) {
+        ssize_t n=write(o->operations,record,length);
+        if (n>=0 && (size_t)n==length) return GIN_SESSION_OK;
+        if (n<0 && errno==EINTR) continue;
+        return GIN_SESSION_OPERATION;
+    }
+    return GIN_SESSION_OPERATION;
+}
+/* Take each terminal receipt once, outside callbacks. Pending slots block input.
+ * The caller retains the primary owner error during abortive teardown. */
+static enum gin_session_code finish_query(struct owner *o,
+    struct gin_connect *connection, uint64_t *active, enum gin_session_code *failure)
+{
+    struct gin_query_result result;
+    enum gin_operation_state state;
+    int taken;
+    *failure=GIN_SESSION_OK;
+    if (!*active) return GIN_SESSION_OK;
+    taken=gin_connect_query_take(connection,&result);
+    if (!taken) return GIN_SESSION_OK;
+    if (taken<0) return GIN_SESSION_CONNECTION;
+    if (result.operation_id!=*active) { *active=0; return GIN_SESSION_CONNECTION; }
+    *active=0;
+    switch (result.outcome) {
+    case GIN_QUERY_ACCEPTED: state=GIN_OPERATION_ACCEPTED_ACK; break;
+    case GIN_QUERY_REMOTE_FAILURE:
+        state=GIN_OPERATION_REMOTE_FAILURE; *failure=GIN_SESSION_SEND_REMOTE_FAILURE; break;
+    case GIN_QUERY_NOT_SENT:
+        state=GIN_OPERATION_NOT_SENT; *failure=GIN_SESSION_QUERY_NOT_SENT; break;
+    case GIN_QUERY_UNCERTAIN:
+        state=GIN_OPERATION_UNCERTAIN; *failure=GIN_SESSION_QUERY_UNCERTAIN; break;
+    default: return GIN_SESSION_CONNECTION;
+    }
+    return publish_operation(o,result.operation_id,GIN_OPERATION_QUERY,state,(unsigned)result.code);
+}
 enum gin_session_code gin_session_run(const struct gin_session_settings *settings,
     int fd, int eof)
+{
+    return gin_session_run_with_operations(settings,fd,eof,-1);
+}
+enum gin_session_code gin_session_run_with_operations(
+    const struct gin_session_settings *settings, int fd, int eof, int operation_fd)
 {
     struct gin_session_settings copy;
     const struct gin_session_settings *s = &copy;
@@ -277,6 +351,12 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
     struct gin_connect_settings connect_settings;
     struct gin_connect_subscription subscriptions[2];
     struct gin_live_projection projection;
+    struct gin_input input = GIN_INPUT_INITIALIZER;
+    struct gin_record record = {{0}, 0};
+    struct gin_command command;
+    struct timespec fifo_deadline = {0, 0};
+    int fifo_cooldown = 0, service_now = 0;
+    uint64_t operation_id = 0, query_id = 0;
     char subject[GIN_CREDENTIAL_NAME_MAX + 1], own_nick[257] = {0};
     size_t subscription_count = 1;
     int output = -1;
@@ -287,13 +367,19 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
     int ready = 0;
     int64_t network_id = 0;
     uint64_t snapshot_epoch = 0;
-    if (!settings || !gin_session_settings_valid(settings) || (eof != 0 && eof != 1))
+    if (!settings || !gin_session_settings_valid(settings) || (eof != 0 && eof != 1) ||
+        (fd >= 0 && fd == operation_fd))
         return GIN_SESSION_INVALID;
     copy = *settings;
     if (session_active) return GIN_SESSION_BUSY;
     owner_init(&o); memset(&credential, 0, sizeof(credential));
     memset(&metadata, 0, sizeof(metadata));
     if (fd != -1 && (fd < 3 || (o.status = borrow_pipe(fd, 1)) < 0)) return GIN_SESSION_STATUS;
+    if (operation_fd != -1 && (operation_fd < 3 ||
+        (o.operations=borrow_pipe(operation_fd,1)) < 0 ||
+        fpathconf(o.operations,_PC_PIPE_BUF) < (long)GIN_OPERATION_RECORD_MAX)) {
+        code=GIN_SESSION_OPERATION; goto done;
+    }
     if (eof && (o.input = borrow_pipe(STDIN_FILENO, 0)) < 0) { code = GIN_SESSION_INPUT; goto done; }
     code = owner_begin(&o);
     if (code != GIN_SESSION_OK) goto done;
@@ -353,7 +439,7 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
         if (cc != GIN_CONNECT_OK) { code=cc==GIN_CONNECT_NOMEM?GIN_SESSION_NOMEM:GIN_SESSION_CONNECTION; goto done; }
     }
     if (gin_connect_topic_count(connection) > 4u) { code=GIN_SESSION_ROUTE; goto done; }
-    metadata.connection=connection; gin_credential_clear(&credential);
+    metadata.connection=connection;
     if (owner_stop(&o,&code)) goto done;
     {
         enum gin_connect_code cc=gin_connect_start(connection);
@@ -371,7 +457,8 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
             if (clock_gettime(CLOCK_REALTIME,&wall) < 0 ||
                 !gin_live_receive_ms(&wall,&metadata.receive_ms)) { code=GIN_SESSION_IO; break; }
         }
-        cc=gin_connect_service(connection,GIN_SESSION_SERVICE_MS);
+        cc=gin_connect_service(connection,service_now ? 0u : GIN_SESSION_SERVICE_MS);
+        service_now=0;
         /* Callback failures are already latched; stop otherwise beats the
          * just-returned aggregate network failure, not an earlier owner error. */
         if (metadata.count_overflow || metadata.bytes_overflow) { code=GIN_SESSION_LIMIT; break; }
@@ -426,12 +513,185 @@ enum gin_session_code gin_session_run(const struct gin_session_settings *setting
             }
             if (joined && epoch && (name.kind==GIN_WINDOW_CHANNEL ||
                 (gin_topology_queries_known(topology) && snapshot_epoch==epoch))) {
+                if (gin_root_init(&o.root,s->local.network,s->local.target,s->local.chantypes)<0 ||
+                    (o.fifo=gin_root_input_open(&o.root,s->local.network,s->local.target,s->local.chantypes))<0) {
+                    code=GIN_SESSION_IO; break;
+                }
                 code=publish_ready(&o); if (code != GIN_SESSION_OK) break;
                 ready=1;
             }
         }
+        if (query_id) {
+            enum gin_session_code failure;
+            code=finish_query(&o,connection,&query_id,&failure);
+            if (code==GIN_SESSION_OK) code=failure;
+            if (code!=GIN_SESSION_OK) break;
+        }
+        if (ready && !query_id && gin_connect_receive_drained(connection)) {
+            enum gin_input_result event;
+            enum gin_command_code parsed;
+            const struct gin_topology_network *network;
+            const struct gin_topology_window *window;
+            struct gin_send_route route;
+            struct gin_send_settings send_settings;
+            struct gin_send_result result;
+            enum gin_operation_kind operation_kind;
+            unsigned invalid_reason;
+            int is_control, selected_part=0;
+            if (fifo_cooldown) {
+                int d=deadline_state(&fifo_deadline);
+                if (d<0) { code=GIN_SESSION_IO; break; }
+                if (!d) continue;
+                fifo_cooldown=0;
+            }
+            /* One bounded framing quantum per serviced/projected owner turn.
+             * Buffered MORE/records are retried without kernel readiness. */
+            event=gin_input_next(&input,o.fifo,&record);
+            if (owner_stop(&o,&code)) break;
+            if (event==GIN_INPUT_EOF) {
+                if (fifo_deadline_start(&fifo_deadline)<0) { code=GIN_SESSION_IO; break; }
+                fifo_cooldown=1;
+                continue;
+            }
+            if (event==GIN_INPUT_ERROR) { code=GIN_SESSION_INPUT; break; }
+            if (event!=GIN_INPUT_LINE && event!=GIN_INPUT_REJECTED) continue;
+            parsed=event==GIN_INPUT_REJECTED ? GIN_COMMAND_INVALID :
+                gin_command_parse(record.data,record.length,s->local.chantypes,&command);
+            if (parsed==GIN_COMMAND_EMPTY) continue;
+            if (operation_id==UINT64_MAX) { code=GIN_SESSION_LIMIT; break; }
+            ++operation_id;
+            if (parsed!=GIN_COMMAND_OK || (command.kind!=GIN_COMMAND_SEND &&
+                command.kind!=GIN_COMMAND_JOIN && command.kind!=GIN_COMMAND_PART &&
+                command.kind!=GIN_COMMAND_QUERY)) {
+                unsigned reason=parsed==GIN_COMMAND_UNSUPPORTED || parsed==GIN_COMMAND_OK ?
+                    GIN_COMMAND_UNSUPPORTED : GIN_COMMAND_INVALID;
+                code=publish_operation(&o,operation_id,GIN_OPERATION_INPUT,
+                    GIN_OPERATION_REJECTED,reason);
+                if (code==GIN_SESSION_OK) code=reason==GIN_COMMAND_UNSUPPORTED ?
+                    GIN_SESSION_UNSUPPORTED : GIN_SESSION_INPUT;
+                break;
+            }
+            is_control=command.kind!=GIN_COMMAND_SEND;
+            operation_kind=command.kind==GIN_COMMAND_JOIN?GIN_OPERATION_JOIN:
+                command.kind==GIN_COMMAND_PART?GIN_OPERATION_PART:
+                command.kind==GIN_COMMAND_QUERY?GIN_OPERATION_QUERY:GIN_OPERATION_SEND;
+            invalid_reason=command.kind==GIN_COMMAND_QUERY?GIN_QUERY_INVALID:
+                is_control?GIN_CONTROL_INVALID:GIN_SEND_INVALID;
+            code=publish_operation(&o,operation_id,operation_kind,GIN_OPERATION_PENDING,0);
+            if (code!=GIN_SESSION_OK) break;
+            network=gin_topology_find_slug(topology,name.input_network_slug);
+            window=gin_topology_find_window(topology,network_id,name.canonical_target);
+            if (!network || network->id!=network_id || !window ||
+                (name.kind==GIN_WINDOW_CHANNEL ?
+                    window->role!=GIN_REMOTE_CHANNEL || !window->joined :
+                    !gin_topology_queries_known(topology) || window->role!=GIN_REMOTE_QUERY)) {
+                code=publish_operation(&o,operation_id,operation_kind,
+                    GIN_OPERATION_NOT_ATTEMPTED,invalid_reason);
+                if (code==GIN_SESSION_OK) code=command.kind==GIN_COMMAND_QUERY?
+                    GIN_SESSION_QUERY_NOT_ATTEMPTED:is_control?
+                    GIN_SESSION_CONTROL_NOT_ATTEMPTED:GIN_SESSION_SEND_NOT_ATTEMPTED;
+                break;
+            }
+            if (command.kind==GIN_COMMAND_PART) {
+                struct gin_name control_name;
+                if (gin_name_prepare(name.input_network_slug,(const char *)command.data,
+                    s->local.chantypes,&control_name)<0) {
+                    code=publish_operation(&o,operation_id,operation_kind,
+                        GIN_OPERATION_NOT_ATTEMPTED,GIN_CONTROL_INVALID);
+                    if (code==GIN_SESSION_OK) code=GIN_SESSION_CONTROL_NOT_ATTEMPTED;
+                    break;
+                }
+                selected_part=name.kind==GIN_WINDOW_CHANNEL &&
+                    !strcmp(control_name.canonical_target,name.canonical_target);
+            }
+            route.network_slug=name.input_network_slug;
+            route.wire_target=is_control?(const char *)command.data:name.original_wire_target;
+            route.chantypes=s->local.chantypes;
+            route.role=is_control || window->role==GIN_REMOTE_CHANNEL?
+                GIN_SEND_ROLE_CHANNEL:GIN_SEND_ROLE_QUERY;
+            route.mode=GIN_SEND_MODE_PLAIN;
+            send_settings.auth=connect_settings.http;
+            send_settings.protocol=policy;
+            if (owner_stop(&o,&code)) {
+                enum gin_session_code stopped=code;
+                code=publish_operation(&o,operation_id,operation_kind,
+                    GIN_OPERATION_NOT_ATTEMPTED,invalid_reason);
+                if (code==GIN_SESSION_OK) code=stopped;
+                break;
+            }
+            if (command.kind==GIN_COMMAND_QUERY) {
+                enum gin_query_code qc=gin_connect_open_query(connection,topology,
+                    name.input_network_slug,(const char *)command.data,s->local.chantypes,
+                    GIN_QUERY_MODE_PLAIN,operation_id,(unsigned)s->join_ms);
+                if (qc!=GIN_QUERY_OK) {
+                    code=publish_operation(&o,operation_id,GIN_OPERATION_QUERY,
+                        GIN_OPERATION_NOT_ATTEMPTED,(unsigned)qc);
+                    if (code==GIN_SESSION_OK) code=GIN_SESSION_QUERY_NOT_ATTEMPTED;
+                    break;
+                }
+                query_id=operation_id;
+                service_now=1;
+                continue;
+            }
+            if (is_control) {
+                struct gin_control_result control=command.kind==GIN_COMMAND_PART?
+                    gin_control_part(&o.root,&send_settings,&credential,&route,operation_id):
+                    gin_control_join(&o.root,&send_settings,&credential,&route,operation_id);
+                enum gin_operation_state state;
+                enum gin_session_code failure=GIN_SESSION_OK;
+                switch (control.outcome) {
+                case GIN_CONTROL_ACCEPTED: state=GIN_OPERATION_ACCEPTED_PENDING; break;
+                case GIN_CONTROL_NOT_ATTEMPTED:
+                    state=GIN_OPERATION_NOT_ATTEMPTED;
+                    failure=GIN_SESSION_CONTROL_NOT_ATTEMPTED; break;
+                case GIN_CONTROL_REMOTE_FAILURE:
+                    state=GIN_OPERATION_REMOTE_FAILURE;
+                    failure=GIN_SESSION_SEND_REMOTE_FAILURE; break;
+                default:
+                    state=GIN_OPERATION_UNCERTAIN;
+                    failure=GIN_SESSION_CONTROL_UNCERTAIN; break;
+                }
+                code=publish_operation(&o,operation_id,operation_kind,state,(unsigned)control.code);
+                if (code==GIN_SESSION_OK) code=failure;
+                /* The selected channel's boot membership is no longer authority.
+                 * Stop after reporting, including when following input is buffered. */
+                if (code!=GIN_SESSION_OK || selected_part) break;
+                service_now=1;
+                continue;
+            }
+            result=gin_send_plain(&o.root,&send_settings,&credential,&route,
+                operation_id,command.data,command.length);
+            /* Preserve native outcome, not an inference from HTTP status.
+             * Publish completion before observing deferred termination. */
+            {
+                enum gin_operation_state state;
+                enum gin_session_code failure=GIN_SESSION_OK;
+                switch (result.outcome) {
+                case GIN_SEND_ACCEPTED_PERSISTED: state=GIN_OPERATION_ACCEPTED_PERSISTED; break;
+                case GIN_SEND_ACCEPTED_NO_PERSIST: state=GIN_OPERATION_ACCEPTED_NO_PERSIST; break;
+                case GIN_SEND_NOT_ATTEMPTED:
+                    state=GIN_OPERATION_NOT_ATTEMPTED; failure=GIN_SESSION_SEND_NOT_ATTEMPTED; break;
+                case GIN_SEND_REMOTE_FAILURE:
+                    state=GIN_OPERATION_REMOTE_FAILURE; failure=GIN_SESSION_SEND_REMOTE_FAILURE; break;
+                default: state=GIN_OPERATION_UNCERTAIN; failure=GIN_SESSION_SEND_UNCERTAIN; break;
+                }
+                code=publish_operation(&o,operation_id,GIN_OPERATION_SEND,state,(unsigned)result.code);
+                if (code==GIN_SESSION_OK) code=failure;
+                if (code!=GIN_SESSION_OK) break;
+            }
+            service_now=1;
+        }
     }
 done:
+    if (query_id) {
+        enum gin_session_code failure, receipt;
+        /* Close classifies queued bytes as NOT_SENT or UNCERTAIN without replay.
+         * Keep a graceful stop graceful, but never hide receipt-publication I/O. */
+        gin_connect_close(connection);
+        receipt=finish_query(&o,connection,&query_id,&failure);
+        if (receipt==GIN_SESSION_OK && query_id) receipt=GIN_SESSION_CONNECTION;
+        if (code==GIN_SESSION_OK) code=receipt;
+    }
     gin_connect_free(connection); gin_live_queue_free(metadata.queue);
     close_owned(&output,&code);
     gin_topology_free(topology); gin_credential_clear(&credential);
@@ -542,7 +802,11 @@ const char *gin_session_error(enum gin_session_code c)
         "TLS failure", "topology failure", "selected route unavailable",
         "connection failure", "startup timeout", "status pipe failure",
         "unsupported session input", "metadata limit", "unsupported session mode",
-        "out of memory", "session cleanup failure", "session owner busy"
+        "out of memory", "session cleanup failure", "session owner busy",
+        "operation pipe failure", "send not attempted",
+        "remote operation failure", "send outcome uncertain",
+        "control not attempted", "control outcome uncertain",
+        "query not attempted", "query not sent", "query outcome uncertain"
     };
     return (unsigned)c < sizeof(errors) / sizeof(errors[0]) ? errors[c] :
         "unknown session error";
