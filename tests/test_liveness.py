@@ -45,6 +45,8 @@ class Server(http.server.ThreadingHTTPServer):
         self.upgrades = 0
         self.mode = "ok"
         self.expected_tls_rejection = False
+        self.marker_limit = None
+        self.markers_sent = 0
 
     def record(self, collection, value):
         with self.cv:
@@ -104,6 +106,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.connection.sendall(server_frame(json.dumps(frame).encode()))
 
     def marker(self):
+        srv = cast(Server, self.server)
+        if srv.marker_limit is not None and srv.markers_sent >= srv.marker_limit:
+            return
+        srv.markers_sent += 1
         self.send([None, None, ROOT_TOPIC, "event", {"kind": "fixture_barrier"}])
 
     def upgrade(self):
@@ -332,9 +338,10 @@ class LivenessTests(unittest.TestCase):
     tls = test_http.HTTPTests.tls
 
     @contextlib.contextmanager
-    def fixture(self, mode="ok", cert="good", ca="ca.pem", **settings):
+    def fixture(self, mode="ok", cert="good", ca="ca.pem", marker_limit=None, **settings):
         srv = Server(("127.0.0.1", 0))
         srv.mode = mode
+        srv.marker_limit = marker_limit
         srv.expected_tls_rejection = cert != "good" or ca != "ca.pem"
         srv.socket = self.tls(cert).wrap_socket(srv.socket, server_side=True)
         thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": .02})
@@ -450,13 +457,18 @@ class LivenessTests(unittest.TestCase):
 
     def test_actual_root_severance_stops_ready_and_joining(self):
         for mode in ("ok", "joining"):
-            with self.subTest(mode=mode), self.fixture(mode) as (srv, d):
+            # One client-received barrier; later heartbeat ACKs add no app data.
+            with self.subTest(mode=mode), self.fixture(mode, marker_limit=1) as (srv, d):
                 if mode == "ok":
                     initial = self.ready(d)
                 else:
                     d.command("start")
                     initial = d.command("until 10000 1")
                     self.assertEqual(initial["connection"], 2)
+                    # Force the real scheduler to observe another heartbeat before severance.
+                    waited = d.command("drive " + ("3000" if "GIN_LIVENESS_PREFIX" in os.environ else "600"))
+                    self.assertEqual(waited["connection"], 2)
+                    self.assertGreaterEqual(len([f for _, f in srv.frames if f[3] == "heartbeat"]), 2)
                 srv.actions.put(self.severance())
                 state = d.command("drive 10000")
                 self.assertEqual(state["code"], "session-expired", state)
