@@ -106,7 +106,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.connection.sendall(server_frame(json.dumps(frame).encode()))
 
     def marker(self):
-        srv = self.server
+        srv = cast(Server, self.server)
         if srv.marker_limit is not None and srv.markers_sent >= srv.marker_limit:
             return
         srv.markers_sent += 1
