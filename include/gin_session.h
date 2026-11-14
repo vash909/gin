@@ -34,7 +34,11 @@ enum gin_session_code {
     GIN_SESSION_TLS, GIN_SESSION_TOPOLOGY, GIN_SESSION_ROUTE,
     GIN_SESSION_CONNECTION, GIN_SESSION_TIMEOUT, GIN_SESSION_STATUS,
     GIN_SESSION_INPUT, GIN_SESSION_LIMIT, GIN_SESSION_UNSUPPORTED,
-    GIN_SESSION_NOMEM, GIN_SESSION_CLEANUP, GIN_SESSION_BUSY
+    GIN_SESSION_NOMEM, GIN_SESSION_CLEANUP, GIN_SESSION_BUSY,
+    GIN_SESSION_OPERATION, GIN_SESSION_SEND_NOT_ATTEMPTED,
+    GIN_SESSION_SEND_REMOTE_FAILURE, GIN_SESSION_SEND_UNCERTAIN,
+    GIN_SESSION_CONTROL_NOT_ATTEMPTED, GIN_SESSION_CONTROL_UNCERTAIN,
+    GIN_SESSION_QUERY_NOT_ATTEMPTED, GIN_SESSION_QUERY_NOT_SENT, GIN_SESSION_QUERY_UNCERTAIN
 };
 
 /* No I/O. Default timers and chantypes '#'; all required settings empty.
@@ -57,10 +61,21 @@ int gin_session_settings_valid(const struct gin_session_settings *settings);
  * status_fd -1 disables reporting; otherwise >=3, already nonblocking pipe
  * write end. Borrow input and duplicate it, preserve original flags/ownership.
  * READY\n is an atomic bounded pipe write after correlated joins and validated
- * selected route/plain policy; backpressure/broken sink terminates cleanly.
+ * selected route/plain policy and held-root FIFO reader acquisition;
+ * backpressure/broken sink terminates cleanly. This pipe is READY-only.
  * stop_on_eof 0 ignores stdin; 1 requires an already nonblocking stdin pipe read
  * end, and only observed zero read stops; any input bytes fail, never commands.
- * Selected-window log reception only; no FIFO sends, reconnect or history.
+ * Selected-window log reception, literal FIFO SEND and typed JOIN/PART controls.
+ * Command targets never replace the selected owner destination. Acceptance is
+ * pending membership, not an observed join/part. Selected PART terminates after
+ * its outcome is reported. QUERY uses the existing correlated asynchronous
+ * root operation; its terminal receipt is consumed before more FIFO input.
+ * Query ACK is acceptance only, never observed membership or delivery.
+ * Sends use the selected original wire target and retained bound credential,
+ * outside callbacks, without local echo or automatic retry. Failures terminate
+ * with static diagnostics after cleanup; accepted sends are silent. FIFO EOF
+ * retains the reader with a monotonic 100ms cooldown and does not stop reception.
+ * No reconnect or history. One non-reused owner operation ID per SEND.
  * Explicit plain is an operator assertion, not server encryption attestation.
  * SIGINT/TERM defer through existing synchronous startup calls, which can still
  * finish later internal requests. Checks between aggregate phases and bounded
@@ -69,6 +84,23 @@ int gin_session_settings_valid(const struct gin_session_settings *settings);
  * stdio, including errors; caller may use static diagnostics after return. */
 enum gin_session_code gin_session_run(const struct gin_session_settings *settings,
     int status_fd, int stop_on_eof);
+
+/* Same owner as gin_session_run (which passes operation_fd=-1). Optional
+ * operation_fd is >=3, a nonblocking FIFO with write capability and observed
+ * PIPE_BUF>=192; borrowed/duplicated without changing caller flags. Must differ
+ * numerically from status_fd; caller supplies independent underlying streams
+ * (aliases are not detected). OP1 records contain only owner id, kind, state,
+ * and unsigned native reason; no payload or recipient-delivery assertion.
+ * Nonempty records get unique nonzero monotonic ids. Invalid input reports only
+ * INPUT REJECTED. SEND PENDING must publish before preflight/mutation; sink
+ * failure is fatal, never queued/retried. Native completion publishes one terminal
+ * outcome even after a deferred signal; terminal sink failure may follow effects.
+ * NOT_ATTEMPTED with GIN_SEND_INVALID also covers local owner rejection,
+ * including a stop observed after PENDING but before aggregate HTTP begins.
+ * No automatic replay. -1 leaves accepted operations silent. */
+enum gin_session_code gin_session_run_with_operations(
+    const struct gin_session_settings *settings, int status_fd,
+    int stop_on_eof, int operation_fd);
 
 /* Explicit raw-bearer enrollment: consume safe owned0600/single-link regular
  * input before root acquisition. Exact 1..4096 bearer bytes, no trimming/NUL/LF.

@@ -1,4 +1,5 @@
 #include "gin_auth.h"
+#include "json_evidence.h"
 #include <jansson.h>
 #include <stdlib.h>
 #include <string.h>
@@ -108,7 +109,8 @@ static enum gin_auth_code exchange(const struct gin_auth_settings *s,
     }
     if (!bounded_json(body, r.body_length)) goto done;
     root = json_loadb((const char *)body, r.body_length, JSON_REJECT_DUPLICATES, NULL);
-    if (!json_is_object(root) || !clean_strings(root)) goto done;
+    if (!json_is_object(root) || !gin_json_evidence(body, r.body_length, root) ||
+        !clean_strings(root)) goto done;
     if (r.http_status == 403) {
         const char *error = text(root, "error", 255);
         code = error && !strcmp(error, "client_token_scope") ? GIN_AUTH_SCOPE : GIN_AUTH_FORBIDDEN;

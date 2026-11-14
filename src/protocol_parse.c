@@ -1,4 +1,5 @@
 #include "gin_protocol.h"
+#include "json_evidence.h"
 
 #include <jansson.h>
 #include <limits.h>
@@ -86,7 +87,7 @@ static int diagnostic_clean(const char *s, size_t length)
 enum gin_protocol_code gin_protocol_parse(const struct gin_protocol_policy *policy,
     const unsigned char *body, size_t length, struct gin_protocol_info *out)
 {
-    json_error_t error;
+    json_error_t error = {0};
     json_t *root;
     json_t *server;
     json_t *version;
@@ -113,7 +114,7 @@ enum gin_protocol_code gin_protocol_parse(const struct gin_protocol_policy *poli
     if (root == NULL) {
         return GIN_PROTOCOL_MALFORMED;
     }
-    if (!json_is_object(root)) {
+    if (!json_is_object(root) || !gin_json_evidence(body, length, root)) {
         json_decref(root);
         return GIN_PROTOCOL_MALFORMED;
     }

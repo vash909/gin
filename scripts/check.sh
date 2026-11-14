@@ -61,9 +61,17 @@ GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --err
     python3 tests/test_connect.py
 GIN_LIVENESS_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_liveness.py
-for unit in test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+for unit in test_session_operation test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
     valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
         ".build/$unit"
+done
+for unit in test_authority_json_config test_authority_json_identity test_authority_json_store; do
+    for mode in mutation sweep; do
+        valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all ".build/$unit" "$mode"
+    done
+done
+for mode in ack-mutation ack-sweep ack-null severance-mutation severance-code-mutation severance-null severance-sweep; do
+    valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_authority_json_connect "$mode"
 done
 GIN_RENDER_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_render.py
@@ -85,6 +93,18 @@ GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --err
     python3 tests/test_session_backlog.py
 GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_session_reception.py
+GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_outbound.py
+GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_operations.py
+GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_controls.py
+GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_query.py
+GIN_SESSION_BINARY=.build/gin_receive_observer GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_admission.py
+GIN_SESSION_BINARY=.build/gin_owner_fault GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 tests/test_session_owner_faults.py
 valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
     .build/test_live_json_fidelity render
 printf '%s\n' 'All local development checks passed.'

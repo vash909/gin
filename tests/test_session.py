@@ -218,7 +218,12 @@ class StartupTracer(unittest.TestCase):
                 for secret in [TOKEN.encode(), b'YWF+']:
                     self.assertNotIn(secret, stdout + stderr, 'credential disclosed')
                 self.assertEqual(credential.read_bytes(), before, 'connect mutated credential store')
-                self.assertEqual(list(root.rglob('out')), [], 'startup without chat projected output')
+                outputs = list(root.rglob('out'))
+                self.assertEqual(len(outputs), 1, 'READY materializes only the selected window')
+                self.assertEqual(outputs[0].read_bytes(), b'', 'startup without chat appended output')
+                self.assertFalse(outputs[0].is_symlink())
+                self.assertFalse(outputs[0].with_name('in').is_symlink())
+                self.assertTrue(outputs[0].with_name('in').is_fifo())
                 check = subprocess.run(self.command('init', '-d', root, '-n', 'NetA', '-c', '#Room'),
                     capture_output=True, timeout=30 if PREFIX else 5)
                 self.assertEqual(check.returncode, 0, 'root lock leaked after session teardown')
