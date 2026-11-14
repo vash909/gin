@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <errno.h>
 static int fault_armed;
+static int clock_eligible;
 static enum gin_input_result fault_input(struct gin_input *input, int fd,
     struct gin_record *record)
 {
@@ -19,7 +20,10 @@ static enum gin_input_result fault_input(struct gin_input *input, int fd,
         errno = EINVAL; return GIN_INPUT_ERROR;
     }
     result = gin_input_next(input, fd, record);
-    if (result == GIN_INPUT_EOF && mode && strcmp(mode, "clock-max") == 0)
+    if (result == GIN_INPUT_EMPTY &&
+        mode && strcmp(mode, "clock-max") == 0) clock_eligible = 1;
+    if (result == GIN_INPUT_EOF && clock_eligible &&
+        mode && strcmp(mode, "clock-max") == 0)
         fault_armed = 1;
     return result;
 }

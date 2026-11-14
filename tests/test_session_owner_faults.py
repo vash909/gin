@@ -64,9 +64,17 @@ class OwnerFaults(unittest.TestCase):
                 env=dict(os.environ, GIN_OWNER_FAULT=fault), pass_fds=(rw,),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             os.close(rw)
+            writer = -1
             try:
                 self.assertTrue(select.select([rr], [], [], outbound.budget(10))[0])
                 self.assertEqual(os.read(rr, 128), b'READY\n')
+                # Establish actual data consumption followed by writer EOF.
+                # A virgin nonblocking FIFO need not report EOF on every OS.
+                writer = os.open(next(root.rglob('in')), os.O_WRONLY | os.O_NONBLOCK)
+                self.assertGreaterEqual(os.fpathconf(writer, 'PC_PIPE_BUF'), 1)
+                self.assertEqual(os.write(writer, b'\n'), 1)
+                os.close(writer)
+                writer = -1
                 if not fault:
                     self.assertFalse(select.select([rr], [], [], .3)[0])
                     self.assertIsNone(proc.poll())
@@ -84,6 +92,8 @@ class OwnerFaults(unittest.TestCase):
                 if proc.poll() is None:
                     proc.kill()
                 proc.communicate(timeout=outbound.budget(10))
+                if writer >= 0:
+                    os.close(writer)
                 os.close(rr)
 
     def test_pending_signal_prevents_new_http(self):
