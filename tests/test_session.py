@@ -26,6 +26,8 @@ from ws_fixture_frames import server_frame, take_client_frame
 TOKEN = 'aa~'
 UUID = '12345678-1234-1234-1234-123456789abc'
 PREFIX = shlex.split(os.environ.get('GIN_SESSION_PREFIX', ''))
+# Positive test setup allowance, not a deadline oracle; outer waits stay bounded.
+POSITIVE_SETUP_MS = 180000
 
 
 class Server(http.server.ThreadingHTTPServer):

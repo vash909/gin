@@ -175,8 +175,9 @@ class HistoryRetry(reconnect.ReconnectFixture):
             saved_credential, saved_sentinel = credential.read_bytes(), sentinel.read_bytes()
             settings = self.certdir / 'initial-history-retry-settings'
             settings.write_text(('heartbeat_interval_ms=1000\nheartbeat_timeout_ms=3000\n'
-                'connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=12000\n' if instrumented else
-                'heartbeat_interval_ms=150\nheartbeat_timeout_ms=500\nstartup_ms=2000\n') +
+                'connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n' if instrumented else
+                'heartbeat_interval_ms=150\nheartbeat_timeout_ms=500\n') +
+                f'startup_ms={reconnect.startup.POSITIVE_SETUP_MS}\n' +
                 'retry_base_ms=20\nretry_cap_ms=40\nmax_retries=1\n')
             settings.chmod(0o600)
             rr, rw = os.pipe()

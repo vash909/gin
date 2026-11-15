@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import unittest
+from typing import cast
 
 import test_session_checkpoint_catchup as catchup
 import test_session_reconnect as reconnect
@@ -69,12 +70,13 @@ class EpochHistory(reconnect.ReconnectFixture):
             sentinel_identity = (sentinel.stat().st_dev, sentinel.stat().st_ino, sentinel.read_bytes())
             settings = self.certdir / 'same-pid-history-settings'
             policy = ('heartbeat_interval_ms=1000\nheartbeat_timeout_ms=3000\n' if instrumented else
-                      'heartbeat_interval_ms=150\nheartbeat_timeout_ms=500\nstartup_ms=500\n')
+                      'heartbeat_interval_ms=150\nheartbeat_timeout_ms=500\n')
             # Match the established bounded reconnect fixture; this case tests
             # history rearming, not a long-backoff timeout.
             policy += 'retry_base_ms=20\nretry_cap_ms=40\nmax_retries=1\n'
             if instrumented:
-                policy += 'connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=3000\n'
+                policy += 'connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
+            policy += f'startup_ms={reconnect.startup.POSITIVE_SETUP_MS}\n'
             settings.write_text(policy)
             settings.chmod(0o600)
             srv.persisted_id = 17
@@ -207,6 +209,38 @@ class EpochHistory(reconnect.ReconnectFixture):
                                  'root lock not released after reap')
                 self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), lock_identity)
                 print('CLEANUP: reaped before held-HTTP release; output/credentials/lock inodes and unrelated root preserved; root reacquired', flush=True)
+
+
+class SlowInitialHistoryHandler(catchup.Handler):
+    delayed_servers: set[reconnect.Server] = set()
+
+    def do_GET(self):
+        srv = cast(reconnect.Server, self.server)
+        if self.path == '/api/config' and len(srv.paths) == 6:
+            assert srv.ws_attempts == 1
+            assert srv.joins == reconnect.live.TOPICS
+            assert not srv.ready_observed.is_set()
+            assert srv not in self.delayed_servers
+            self.delayed_servers.add(srv)
+            # Delay only the initial history preflight, never rearm or heartbeat.
+            time.sleep(.650)
+            if srv.stopped.is_set():
+                self.close_connection = True
+                return
+        super().do_GET()
+
+
+class SlowInitialHistoryEpoch(EpochHistory):
+    handler_class = SlowInitialHistoryHandler
+
+    def test_native_reconnect_rearms_quiet_history_in_same_pid(self):
+        # Inherited class setup supplies this subclass its own certificate/root tree.
+        self.addCleanup(SlowInitialHistoryHandler.delayed_servers.clear)
+        try:
+            super().test_native_reconnect_rearms_quiet_history_in_same_pid()
+        finally:
+            self.assertEqual(len(SlowInitialHistoryHandler.delayed_servers), 1,
+                             'slow initial history preflight was not exercised')
 
 
 if __name__ == '__main__':

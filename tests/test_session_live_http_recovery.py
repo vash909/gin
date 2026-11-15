@@ -120,7 +120,7 @@ class LiveHttpRecovery(reconnect.ReconnectFixture):
             expected_tree = old_tree | {str(output.with_name('.gin.checkpoint').relative_to(root))}
             interval, timeout = (1000, 3000) if instrumented else (150, 500)
             settings = self.certdir / 'live-http-loss-settings'
-            settings.write_text(f'startup_ms={3000 if instrumented else 500}\n'
+            settings.write_text(f'startup_ms={startup.POSITIVE_SETUP_MS}\n'
                 'connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
                 f'heartbeat_interval_ms={interval}\nheartbeat_timeout_ms={timeout}\n'
                 'retry_base_ms=20\nretry_cap_ms=40\nmax_retries=2\n')

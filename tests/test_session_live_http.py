@@ -95,7 +95,7 @@ class LiveHttpTracer(reconnect.ReconnectFixture):
             old_credential = credential.read_bytes()
             interval, timeout = (1000, 3000) if instrumented else (150, 500)
             settings = self.certdir / 'live-held-send-settings'
-            settings.write_text(f'startup_ms={3000 if instrumented else 500}\nconnect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
+            settings.write_text(f'startup_ms={startup.POSITIVE_SETUP_MS}\nconnect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
                 f'heartbeat_interval_ms={interval}\nheartbeat_timeout_ms={timeout}\nmax_retries=0\n')
             settings.chmod(0o600)
             rr, rw = os.pipe()

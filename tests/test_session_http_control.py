@@ -6,10 +6,12 @@ from pathlib import Path
 import select
 import signal
 import subprocess
+import sys
 import threading
 import unittest
 from typing import cast
 import test_session as startup
+from owner_clock_fixture import OwnerClock
 
 
 class Server(startup.Server):
@@ -92,18 +94,28 @@ class HttpControl(unittest.TestCase):
             old_credential = credential.read_bytes()
             old_tree = {str(p.relative_to(root)) for p in root.rglob('*')}
             config = self.certdir / ('http-stop-settings' if stop else 'http-deadline-settings')
-            budget_ms = 180000 if stop else 3000 if instrumented else 500
+            # Generous setup; negatives expire the fixed 180 s owner episode
+            # only after the exact held phase, using the private clock role.
+            budget_ms = 180000
             config.write_text(f'startup_ms={budget_ms}\nconnect_ms=10000\ntotal_ms=20000\n'
                               'join_ms=12000\nmax_retries=2\n')
             config.chmod(0o600)
             rr, rw = os.pipe()
             for fd in (rr, rw):
                 os.set_blocking(fd, False)
-            proc = None
+            proc, clock = None, None
             try:
-                proc = subprocess.Popen(self.command('connect', '-f', config, '-d', root, '-n', 'NetA',
-                    '-c', '#Room', '-e', origin, '-m', 'plain', '-a', self.certdir / 'ca.pem', '-R', rw),
-                    pass_fds=(rw,), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                command = self.command('connect', '-f', config, '-d', root, '-n', 'NetA',
+                    '-c', '#Room', '-e', origin, '-m', 'plain', '-a', self.certdir / 'ca.pem', '-R', rw)
+                if not stop:
+                    clock = OwnerClock(self)
+                    command[len(startup.PREFIX)] = os.environ.get(
+                        'GIN_OWNER_BINARY', str(startup.REPO / '.build/gin_owner_fault'))
+                proc = subprocess.Popen(command, env=clock.environment() if clock else None,
+                    pass_fds=(rw, *(clock.child_fds if clock else ())), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if clock:
+                    clock.parent_after_spawn()
                 os.close(rw)
                 rw = -1
                 self.assertTrue(srv.request_seen.wait(30 if instrumented else 5),
@@ -112,6 +124,9 @@ class HttpControl(unittest.TestCase):
                 self.assertFalse(srv.release_response.is_set())
                 if stop:
                     proc.send_signal(signal.SIGTERM)
+                else:
+                    assert clock is not None
+                    clock.advance(proc, 'E', 30 if instrumented else 5)
                 try:
                     stdout, stderr = proc.communicate(timeout=6 if instrumented else 2)
                 except subprocess.TimeoutExpired:
@@ -138,10 +153,19 @@ class HttpControl(unittest.TestCase):
                 self.assertEqual(credential.read_bytes(), old_credential)
                 self.assertEqual({str(p.relative_to(root)) for p in root.rglob('*')}, old_tree)
             finally:
+                semantic_failure = sys.exc_info()[0] is not None
                 if proc is not None:
                     if proc.poll() is None:
                         proc.kill()
-                    proc.communicate(timeout=90 if instrumented else 10)
+                    stdout, stderr = proc.communicate(timeout=90 if instrumented else 10)
+                    if semantic_failure:
+                        print('INITIAL HTTP OWNER FAILURE: ' + repr({
+                            'phase': held_path, 'occurrence': occurrence, 'exit': proc.returncode,
+                            'stdout': stdout.replace(startup.TOKEN.encode(), b'<redacted>'),
+                            'stderr': stderr.replace(startup.TOKEN.encode(), b'<redacted>'),
+                            'paths': srv.paths}), flush=True)
+                if clock:
+                    clock.close()
                 srv.stopped.set()
                 srv.release_response.set()
                 os.close(rr)

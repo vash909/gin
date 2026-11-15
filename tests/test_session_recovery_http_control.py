@@ -16,6 +16,7 @@ import test_session as startup
 import test_session_liveness as live
 import test_session_reconnect as reconnect
 import test_session_checkpoint_catchup as catchup
+from owner_clock_fixture import OwnerClock
 
 BASE_PATHS = ['/api/config', '/me', '/boot', '/api/config', '/me',
               '/socket/websocket?vsn=2.0.0&client_proto=36', '/api/config', '/me',
@@ -30,11 +31,35 @@ class Server(reconnect.Server):
     release_response: threading.Event
     initial_delay_seen: threading.Event
     handler_tracebacks: list[str]
+    clock_negative: bool
+    warmup_seen: threading.Event
+    release_warmup: threading.Event
+    cancel_warmup: threading.Event
 
 
 class Handler(reconnect.Handler):
     def do_GET(self):
         srv = cast(Server, self.server)
+        if (srv.hold_armed.is_set() and srv.clock_negative and srv.hold_path != '/api/config'
+                and self.path == '/api/config'):
+            assert srv.ready_observed.is_set(), 'warmup preceded actual initial READY'
+            assert self.headers.get('Authorization') is None
+            assert srv.ws_attempts == 1 and srv.paths == BASE_PATHS
+            assert not srv.warmup_seen.is_set(), 'duplicate recovery config warmup'
+            srv.paths.append(self.path)
+            srv.warmup_seen.set()
+            assert srv.release_warmup.wait(90), 'recovery config warmup was not released'
+            if srv.cancel_warmup.is_set():
+                self.close_connection = True
+                return
+            raw = json.dumps({'server': 'grappa', 'protocol_version': 36,
+                              'min_protocol_version': 1}).encode()
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            self.wfile.flush()
+            return
         if srv.hold_armed.is_set() and self.path == srv.hold_path:
             expected_auth = None if self.path == '/api/config' else 'Bearer ' + startup.TOKEN
             assert self.headers.get('Authorization') == expected_auth
@@ -66,13 +91,15 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
     handler_class = Handler
 
     @contextlib.contextmanager
-    def held_fixture(self, path):
+    def held_fixture(self, path, clock_negative=False):
         srv = None
         try:
             with self.fixture('positive') as (base, origin):
                 srv = cast(Server, base)
                 srv.hold_path = path
+                srv.clock_negative = clock_negative
                 srv.hold_armed, srv.request_seen, srv.release_response = [threading.Event() for _ in range(3)]
+                srv.warmup_seen, srv.release_warmup, srv.cancel_warmup = [threading.Event() for _ in range(3)]
                 srv.initial_delay_seen = threading.Event()
                 srv.handler_tracebacks = []
                 original_error = srv.handle_error
@@ -87,6 +114,8 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                     yield srv, origin
                 finally:
                     srv.release_response.set()
+                    srv.cancel_warmup.set()
+                    srv.release_warmup.set()
         finally:
             # Handler errors may arrive during the base fixture's shutdown.
             if srv is not None and srv.errors:
@@ -96,7 +125,7 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
 
     def run_held(self, path='/api/config', stop=False):
         instrumented = bool(startup.PREFIX)
-        with self.held_fixture(path) as (srv, origin):
+        with self.held_fixture(path, clock_negative=not stop) as (srv, origin):
             label = self._testMethodName + '-' + path.strip('/').replace('/', '-') + ('-stop' if stop else '-deadline')
             root = self.certdir / ('recovery-http-' + label)
             init = subprocess.run(self.command('init', '-d', root, '-n', 'NetA', '-c', '#Room'),
@@ -109,10 +138,9 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 'subject_id': startup.UUID, 'subject_name': 'Alice'}))
             credential.chmod(0o600)
             old_credential = credential.read_bytes()
-            # This configured budget applies to BOTH initial startup and recovery.
-            # Keep native VM setup out of a 500 ms scheduling benchmark; recovery
-            # must still expire within its own configured absolute episode.
-            budget = 180000 if stop else 3000 if instrumented else 2000
+            # Fixed virtual episode; ordinary stop cases retain real clocks.
+            # Setup no longer races a short native/JIT wall budget.
+            budget = 180000
             interval, heartbeat_timeout = (1000, 3000) if instrumented else (150, 500)
             config = self.certdir / ('recovery-http-settings-' + label)
             config.write_text(f'startup_ms={budget}\nconnect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
@@ -122,11 +150,19 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
             rr, rw = os.pipe()
             os.set_blocking(rr, False)
             os.set_blocking(rw, False)
-            proc = None
+            proc, clock = None, None
             try:
-                proc = subprocess.Popen(self.command('connect', '-f', config, '-d', root, '-n', 'NetA',
-                    '-c', '#Room', '-e', origin, '-m', 'plain', '-a', self.certdir / 'ca.pem', '-R', rw),
-                    pass_fds=(rw,), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                command = self.command('connect', '-f', config, '-d', root, '-n', 'NetA',
+                    '-c', '#Room', '-e', origin, '-m', 'plain', '-a', self.certdir / 'ca.pem', '-R', rw)
+                if not stop:
+                    clock = OwnerClock(self)
+                    command[len(startup.PREFIX)] = os.environ.get(
+                        'GIN_OWNER_BINARY', str(reconnect.REPO / '.build/gin_owner_fault'))
+                proc = subprocess.Popen(command, env=clock.environment() if clock else None,
+                    pass_fds=(rw, *(clock.child_fds if clock else ())), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if clock:
+                    clock.parent_after_spawn()
                 os.close(rw)
                 rw = -1
                 self.assertTrue(select.select([rr], [], [], 30 if instrumented else 5)[0])
@@ -148,17 +184,31 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 srv.client_close_expected.set()
                 recovery_started = time.monotonic()
                 srv.active_ws.shutdown(socket.SHUT_RDWR)
+                if clock and path != '/api/config':
+                    self.assertTrue(srv.warmup_seen.wait(15 if instrumented else 3),
+                                    'real recovery config warmup was not entered')
+                    self.assertFalse(srv.release_warmup.is_set())
+                    self.assertFalse(srv.request_seen.is_set(), 'target phase preceded clock warmup')
+                    clock.advance(proc, 'A', 30 if instrumented else 5)
+                    self.assertLess(time.monotonic() - recovery_started, 60,
+                                    'setup exhausted the original virtual warmup margin')
+                    self.assertIsNone(proc.poll(), 'owner expired during pre-deadline warmup')
+                    self.assertFalse(select.select([rr], [], [], 0)[0], 'warmup published READY or exited')
+                    self.assertFalse(srv.request_seen.is_set())
+                    srv.release_warmup.set()
                 self.assertTrue(srv.request_seen.wait(15 if instrumented else 3),
                                 'fresh recovery HTTPS phase was never entered')
                 self.assertFalse(srv.release_response.is_set())
                 if stop:
                     proc.send_signal(signal.SIGTERM)
-                # Bound the complete recovery, not another full allowance measured
-                # from entry into whichever held HTTP phase is selected.
-                recovery_limit = recovery_started + budget / 1000 + (3 if instrumented else 1)
-                remaining = (6 if instrumented else 2) if stop else max(.001, recovery_limit - time.monotonic())
+                else:
+                    assert clock is not None
+                    clock.advance(proc, 'E' if path == '/api/config' else 'B', 30 if instrumented else 5)
+                # ACK commits virtual time, not termination. Bound exit separately
+                # with the real parent clock, never a new app allowance per phase.
+                termination_limit = time.monotonic() + (6 if instrumented else 2)
                 try:
-                    stdout, stderr = proc.communicate(timeout=remaining)
+                    stdout, stderr = proc.communicate(timeout=max(.001, termination_limit - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     self.fail('owner remained blocked in recovery HTTPS after stop' if stop else
                               'owner remained blocked beyond recovery episode deadline while HTTPS response was held')
@@ -167,7 +217,7 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 self.assertEqual(stdout, b'')
                 self.assertEqual(stderr, b'' if stop else b'gin: startup timeout\n')
                 if not stop:
-                    self.assertLess(time.monotonic(), recovery_limit, 'original recovery episode budget exceeded')
+                    self.assertLess(time.monotonic(), termination_limit, 'owner ignored virtual episode expiry')
                 self.assertTrue(select.select([rr], [], [], 0)[0])
                 self.assertEqual(os.read(rr, 128), b'', 'additional READY was published during recovery')
                 self.assertEqual(srv.paths, BASE_PATHS + PHASES[:PHASES.index(path) + 1])
@@ -188,6 +238,10 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                             'exit': proc.returncode, 'stdout': stdout.replace(startup.TOKEN.encode(), b'<redacted>'),
                             'stderr': stderr.replace(startup.TOKEN.encode(), b'<redacted>'), 'paths': srv.paths,
                             'ready': srv.ready_observed.is_set(), 'hold_armed': srv.hold_armed.is_set()}), flush=True)
+                if clock:
+                    clock.close()
+                srv.cancel_warmup.set()  # Cleanup release only after owner kill/reap.
+                srv.release_warmup.set()
                 srv.release_response.set()
                 os.close(rr)
                 if rw >= 0:
@@ -197,9 +251,9 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
             self.assertEqual(check.returncode, 0, 'root lock not released')
             return srv.initial_delay_seen.is_set()
 
-    def test_delayed_initial_catchup_preserves_recovery_deadline(self):
+    def test_delayed_initial_catchup_keeps_ordinary_recovery_stop_responsive(self):
         self.handler_class = SlowInitialHistoryHandler
-        self.assertTrue(self.run_held('/me'), 'delayed initial history preflight was not exercised')
+        self.assertTrue(self.run_held('/me', stop=True), 'delayed initial history preflight was not exercised')
 
     def test_held_recovery_config_obeys_original_episode_deadline(self):
         self.run_held()
