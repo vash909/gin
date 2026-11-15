@@ -17,6 +17,11 @@
 #define GIN_SESSION_REQUEST_MAX 60000L
 #define GIN_SESSION_STARTUP_MAX 600000L
 #define GIN_SESSION_SERVICE_MS 50u
+#define GIN_SESSION_HEARTBEAT_INTERVAL_MS 30000L
+#define GIN_SESSION_HEARTBEAT_TIMEOUT_MS 10000L
+#define GIN_SESSION_RETRY_BASE_MS 1000L
+#define GIN_SESSION_RETRY_CAP_MS 30000L
+#define GIN_SESSION_MAX_RETRIES 5L
 #define GIN_SESSION_METADATA_ROWS_MAX 8u
 #define GIN_SESSION_METADATA_BYTES_MAX 1048576u
 
@@ -26,6 +31,8 @@ struct gin_session_settings {
     char mode[GIN_SESSION_MODE_MAX + 1u];
     char ca_file[GIN_SESSION_PATH_MAX + 1u];
     long connect_ms, total_ms, join_ms, startup_ms;
+    long heartbeat_interval_ms, heartbeat_timeout_ms;
+    long retry_base_ms, retry_cap_ms, max_retries;
 };
 
 enum gin_session_code {
@@ -46,7 +53,10 @@ enum gin_session_code {
  * any error. FILE uses legacy 0600/single-link/owner/no-final-symlink, 16384
  * byte/8192 physical-line bounds. Return 0, 1 unsafe/I/O, 2 malformed/bounds.
  * Separate keys: root/network/target/chantypes/origin/mode/ca_file and
- * connect_ms/total_ms/join_ms/startup_ms. No secrets, duplicate or unknown keys.
+ * connect_ms/total_ms/join_ms/startup_ms and heartbeat_interval_ms,
+ * heartbeat_timeout_ms, retry_base_ms, retry_cap_ms, max_retries. Only max_retries
+ * admits canonical zero; interval/timeout/backoff are positive and bounded by
+ * the native liveness policy. No secrets, duplicate or unknown keys.
  * Validate raw bounds, text, positive canonical decimal timers, origin and
  * explicit plain enum even if CLI would override them. Naming is effective.
  * valid performs lexical/effective validation only, never root/CA probing.
@@ -61,10 +71,12 @@ int gin_session_settings_valid(const struct gin_session_settings *settings);
  * status_fd -1 disables reporting; otherwise >=3, already nonblocking pipe
  * write end. Borrow input and duplicate it, preserve original flags/ownership.
  * READY\n is an atomic bounded pipe write after correlated joins and validated
- * selected route/plain policy and held-root FIFO reader acquisition;
+ * selected route/plain policy, bounded history catch-up, any required checkpoint
+ * publication and held-root FIFO reader acquisition;
  * backpressure/broken sink terminates cleanly. This pipe is READY-only.
  * stop_on_eof 0 ignores stdin; 1 requires an already nonblocking stdin pipe read
- * end, and only observed zero read stops; any input bytes fail, never commands.
+ * end, and only observed zero read latches stop; any input bytes fail, never
+ * commands.
  * Selected-window log reception, literal FIFO SEND and typed JOIN/PART controls.
  * Command targets never replace the selected owner destination. Acceptance is
  * pending membership, not an observed join/part. Selected PART terminates after
@@ -72,14 +84,19 @@ int gin_session_settings_valid(const struct gin_session_settings *settings);
  * root operation; its terminal receipt is consumed before more FIFO input.
  * Query ACK is acceptance only, never observed membership or delivery.
  * Sends use the selected original wire target and retained bound credential,
- * outside callbacks, without local echo or automatic retry. Failures terminate
- * with static diagnostics after cleanup; accepted sends are silent. FIFO EOF
+ * outside callbacks, without local echo or outgoing retry. Non-recoverable
+ * failures terminate with static diagnostics after cleanup; accepted sends are silent. FIFO EOF
  * retains the reader with a monotonic 100ms cooldown and does not stop reception.
- * No reconnect or history. One non-reused owner operation ID per SEND.
+ * Native heartbeat and finite reconnect preserve the lifetime retry budget;
+ * bounded catch-up precedes FIFO admission under each current source epoch.
+ * Private selected-output checkpoints retain successfully appended REST-eligible
+ * progress, not maximum live IDs. Incoming duplicate tails and crash ambiguity
+ * remain possible. No command replay; operation IDs are not reused by the owner.
  * Explicit plain is an operator assertion, not server encryption attestation.
- * SIGINT/TERM defer through existing synchronous startup calls, which can still
- * finish later internal requests. Checks between aggregate phases and bounded
- * service, not a hard absolute latency/aggregate deadline guarantee. Preserve
+ * Controlled startup/live/recovery HTTP checks SIGINT/TERM, observed stdin EOF
+ * and deadlines while servicing Native outside curl callbacks. Cancellation is
+ * cooperative, not atomic or a hard DNS/TLS/filesystem latency guarantee. Retry
+ * retains the original startup or current recovery-episode deadline. Preserve
  * caller signal actions/mask/SIGPIPE and descriptors after cleanup. API emits no
  * stdio, including errors; caller may use static diagnostics after return. */
 enum gin_session_code gin_session_run(const struct gin_session_settings *settings,

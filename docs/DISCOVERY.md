@@ -3,8 +3,9 @@
 The [verified-WSS native connection API](CONNECT.md) provides root-first
 subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
 composes verified startup and live selected-window plaintext reception in the
-CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
-interoperability is claimed.
+CLI. The 18.4 development candidate composes FIFO send/control, native
+liveness and bounded history/restart recovery; qualification remains pending.
+No live Grappa interoperability is claimed.
 
 ## Scope and caller policy
 

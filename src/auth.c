@@ -1,4 +1,5 @@
 #include "gin_auth.h"
+#include "http_control.h"
 #include "json_evidence.h"
 #include <jansson.h>
 #include <stdlib.h>
@@ -69,7 +70,7 @@ static int clean_strings(json_t *v)
 
 static enum gin_auth_code exchange(const struct gin_auth_settings *s,
     const char *path, enum gin_http_method method, const char *token,
-    const char *data, struct gin_credential *out)
+    const char *data, struct gin_credential *out, struct gin_http_control *control)
 {
     char url[GIN_CREDENTIAL_ORIGIN_MAX + 32];
     unsigned char body[GIN_AUTH_RESPONSE_MAX];
@@ -87,7 +88,8 @@ static enum gin_auth_code exchange(const struct gin_auth_settings *s,
     q.settings = &transport; q.method = method;
     q.bearer = token; q.bearer_origin = token ? s->origin : NULL;
     q.json_body = (const unsigned char *)data; q.json_length = data ? strlen(data) : 0;
-    r = gin_http_request(&q, body, sizeof(body));
+    r = control ? gin_http_request_controlled(&q,body,sizeof(body),control) :
+        gin_http_request(&q,body,sizeof(body));
     if (r.code != GIN_HTTP_OK && r.code != GIN_HTTP_STATUS) {
         switch (r.code) {
         case GIN_HTTP_TLS: code = GIN_AUTH_TLS; break;
@@ -156,7 +158,7 @@ enum gin_auth_code gin_auth_login(const struct gin_auth_settings *s,
     data = json_dumps(root, JSON_COMPACT);
     json_decref(root);
     if (!data) return GIN_AUTH_INVALID;
-    code = exchange(s, "/auth/login", GIN_HTTP_POST_JSON, NULL, data, out);
+    code = exchange(s, "/auth/login", GIN_HTTP_POST_JSON, NULL, data, out, NULL);
     wipe(data, strlen(data)); free(data);
     return code;
 }
@@ -167,7 +169,7 @@ enum gin_auth_code gin_auth_resume(const struct gin_auth_settings *s,
     if (!out) return GIN_AUTH_INVALID;
     gin_credential_clear(out);
     if (!bearer) return GIN_AUTH_INVALID;
-    return exchange(s, "/me", GIN_HTTP_GET, bearer, NULL, out);
+    return exchange(s, "/me", GIN_HTTP_GET, bearer, NULL, out, NULL);
 }
 
 static int bound(const struct gin_auth_settings *s, const struct gin_credential *c)
@@ -176,25 +178,36 @@ static int bound(const struct gin_auth_settings *s, const struct gin_credential 
         gin_credential_validate(c) == GIN_CREDENTIAL_OK && !strcmp(s->origin, c->origin);
 }
 
-enum gin_auth_code gin_auth_identity(const struct gin_auth_settings *s,
-    const struct gin_credential *c, struct gin_credential *out)
+static enum gin_auth_code identity(const struct gin_auth_settings *s,
+    const struct gin_credential *c, struct gin_credential *out, struct gin_http_control *control)
 {
     enum gin_auth_code code;
     if (!out || c == out) return GIN_AUTH_INVALID;
     gin_credential_clear(out);
     if (!bound(s, c)) return GIN_AUTH_INVALID;
-    code = exchange(s, "/me", GIN_HTTP_GET, c->token, NULL, out);
+    code = exchange(s, "/me", GIN_HTTP_GET, c->token, NULL, out, control);
     if (code == GIN_AUTH_OK && strcmp(c->subject_id, out->subject_id)) {
         gin_credential_clear(out); return GIN_AUTH_SUBJECT;
     }
     return code;
 }
 
+enum gin_auth_code gin_auth_identity(const struct gin_auth_settings *s,
+    const struct gin_credential *c, struct gin_credential *out)
+{
+    return identity(s,c,out,NULL);
+}
+enum gin_auth_code gin_auth_identity_controlled(const struct gin_auth_settings *s,
+    const struct gin_credential *c, struct gin_credential *out, struct gin_http_control *control)
+{
+    return identity(s,c,out,control);
+}
+
 enum gin_auth_code gin_auth_logout(const struct gin_auth_settings *s,
     const struct gin_credential *c)
 {
     if (!bound(s, c)) return GIN_AUTH_INVALID;
-    return exchange(s, "/auth/logout", GIN_HTTP_DELETE, c->token, NULL, NULL);
+    return exchange(s, "/auth/logout", GIN_HTTP_DELETE, c->token, NULL, NULL, NULL);
 }
 
 const char *gin_auth_error(enum gin_auth_code code)

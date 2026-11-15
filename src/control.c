@@ -3,6 +3,7 @@
 #include "gin_fs.h"
 #include "gin_naming.h"
 #include "send_values.h"
+#include "http_control.h"
 #include <jansson.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -75,9 +76,20 @@ static enum gin_control_code remote_error(long status)
     default: return GIN_CONTROL_REMOTE;
     }
 }
+static int control_boundary_abort(struct gin_http_control *http_control)
+{
+    unsigned wait=50u;
+    if (!http_control) return 0;
+    if (http_control->aborted) return 1;
+    if (http_control->tick(http_control->opaque,&wait)) {
+        http_control->aborted=1; return 1;
+    }
+    return 0;
+}
 static struct gin_control_result control(struct gin_root *root,
     const struct gin_send_settings *s, const struct gin_credential *credential,
-    const struct gin_send_route *route, uint64_t id, int part)
+    const struct gin_send_route *route, uint64_t id, int part,
+    struct gin_http_control *http_control)
 {
     struct gin_control_result r = {0};
     struct gin_command command;
@@ -99,7 +111,8 @@ static struct gin_control_result control(struct gin_root *root,
     enum gin_send_code ack;
     r.code = GIN_CONTROL_INVALID; r.operation_id = id;
     r.protocol = GIN_PROTOCOL_INVALID; r.auth = GIN_AUTH_INVALID;
-    if (!s || !id || !route || !route->network_slug || !route->wire_target || !route->chantypes)
+    if ((http_control && !http_control->tick) || !s || !id || !route ||
+        !route->network_slug || !route->wire_target || !route->chantypes)
         return r;
     if (route->role != GIN_SEND_ROLE_CHANNEL) return r;
     if (route->mode == GIN_SEND_MODE_UNKNOWN || route->mode == GIN_SEND_MODE_ENCRYPTED) {
@@ -146,9 +159,14 @@ static struct gin_control_result control(struct gin_root *root,
     policy = s->protocol;
     /* Conservative local feature floor, not a live-version qualification. */
     if (policy.required_server_protocol < 4) policy.required_server_protocol = 4;
-    r.protocol = gin_protocol_fetch(&s->auth, &policy, &info);
+    if (control_boundary_abort(http_control)) { r.code=GIN_CONTROL_TRANSPORT; goto done; }
+    r.protocol = http_control ? gin_protocol_fetch_controlled(&s->auth,&policy,&info,http_control) :
+        gin_protocol_fetch(&s->auth,&policy,&info);
+    if (control_boundary_abort(http_control)) { r.code=GIN_CONTROL_TRANSPORT; goto done; }
     if (r.protocol != GIN_PROTOCOL_OK) { r.code = protocol_error(r.protocol); goto done; }
-    r.auth = gin_auth_identity(&s->auth, credential, &verified);
+    r.auth = http_control ? gin_auth_identity_controlled(&s->auth,credential,&verified,http_control) :
+        gin_auth_identity(&s->auth,credential,&verified);
+    if (control_boundary_abort(http_control)) { r.code=GIN_CONTROL_TRANSPORT; goto done; }
     if (r.auth != GIN_AUTH_OK) { r.code = auth_error(r.auth); goto done; }
     http.url = url; http.ca_file = s->auth.ca_file;
     http.connect_ms = s->auth.connect_ms; http.total_ms = s->auth.total_ms;
@@ -157,7 +175,9 @@ static struct gin_control_result control(struct gin_root *root,
     request.bearer = verified.token; request.bearer_origin = verified.origin;
     request.json_body = (const unsigned char *)json; request.json_length = json_length;
     r.attempted = 1; r.outcome = GIN_CONTROL_UNCERTAIN;
-    response = gin_http_request(&request, reply, GIN_SEND_RESPONSE_MAX);
+    response = http_control ? gin_http_request_controlled(&request,reply,GIN_SEND_RESPONSE_MAX,http_control) :
+        gin_http_request(&request,reply,GIN_SEND_RESPONSE_MAX);
+    if (control_boundary_abort(http_control)) { r.code=GIN_CONTROL_TRANSPORT; goto done; }
     r.http_status = response.http_status;
     switch (response.code) {
     case GIN_HTTP_OK:
@@ -186,11 +206,19 @@ done:
 struct gin_control_result gin_control_join(struct gin_root *root,
     const struct gin_send_settings *s, const struct gin_credential *credential,
     const struct gin_send_route *route, uint64_t id)
-{ return control(root, s, credential, route, id, 0); }
+{ return control(root, s, credential, route, id, 0, NULL); }
 struct gin_control_result gin_control_part(struct gin_root *root,
     const struct gin_send_settings *s, const struct gin_credential *credential,
     const struct gin_send_route *route, uint64_t id)
-{ return control(root, s, credential, route, id, 1); }
+{ return control(root, s, credential, route, id, 1, NULL); }
+struct gin_control_result gin_control_join_controlled(struct gin_root *root,
+    const struct gin_send_settings *s, const struct gin_credential *credential,
+    const struct gin_send_route *route, uint64_t id, struct gin_http_control *http_control)
+{ return control(root,s,credential,route,id,0,http_control); }
+struct gin_control_result gin_control_part_controlled(struct gin_root *root,
+    const struct gin_send_settings *s, const struct gin_credential *credential,
+    const struct gin_send_route *route, uint64_t id, struct gin_http_control *http_control)
+{ return control(root,s,credential,route,id,1,http_control); }
 const char *gin_control_error(enum gin_control_code code)
 {
     static const char *const names[] = {"ok", "invalid", "unsupported", "out-of-memory",

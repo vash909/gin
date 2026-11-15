@@ -1,6 +1,7 @@
 #include "gin_send.h"
 #include "gin_fs.h"
 #include "send_values.h"
+#include "http_control.h"
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,9 +26,18 @@ static int held_root(const struct gin_root *r)
         l.st_dev == named.st_dev && l.st_ino == named.st_ino &&
         S_ISREG(named.st_mode) && (fcntl(r->lockfd, F_GETFL) & O_ACCMODE) == O_RDWR;
 }
-struct gin_send_result gin_send_plain(const struct gin_root *root,
+static int send_control_abort(struct gin_http_control *control)
+{
+    unsigned wait=50u;
+    if (!control) return 0;
+    if (control->aborted) return 1;
+    if (control->tick(control->opaque,&wait)) { control->aborted=1; return 1; }
+    return 0;
+}
+static struct gin_send_result send_plain(const struct gin_root *root,
     const struct gin_send_settings *s, const struct gin_credential *credential,
-    const struct gin_send_route *route, uint64_t id, const unsigned char *body, size_t length)
+    const struct gin_send_route *route, uint64_t id, const unsigned char *body, size_t length,
+    struct gin_http_control *control)
 {
     struct gin_send_result r = {0};
     struct gin_protocol_info info;
@@ -42,7 +52,7 @@ struct gin_send_result gin_send_plain(const struct gin_root *root,
     r.protocol = GIN_PROTOCOL_INVALID; r.auth = GIN_AUTH_INVALID;
     memset(&verified, 0, sizeof(verified));
     /* All lexical checks, including exact stored origin, precede even fstat. */
-    if (!s || !id || !root || !gin_http_origin_valid(s->auth.origin) ||
+    if ((control && !control->tick) || !s || !id || !root || !gin_http_origin_valid(s->auth.origin) ||
         s->auth.connect_ms <= 0 || s->auth.total_ms <= 0 ||
         s->auth.connect_ms > s->auth.total_ms || s->auth.total_ms > GIN_HTTP_TIMEOUT_MAX ||
         s->protocol.client_protocol <= 0 || s->protocol.required_server_protocol <= 0 ||
@@ -56,10 +66,15 @@ struct gin_send_result gin_send_plain(const struct gin_root *root,
     url = malloc(url_length + 1); reply = malloc(GIN_SEND_RESPONSE_MAX);
     if (!url || !reply) { r.code = GIN_SEND_NOMEM; goto done; }
     strcpy(url, s->auth.origin); strcat(url, path);
-    r.protocol = gin_protocol_fetch(&s->auth, &s->protocol, &info);
+    if (send_control_abort(control)) { r.code=GIN_SEND_TRANSPORT; goto done; }
+    r.protocol = control ? gin_protocol_fetch_controlled(&s->auth,&s->protocol,&info,control) :
+        gin_protocol_fetch(&s->auth,&s->protocol,&info);
+    if (send_control_abort(control)) { r.code=GIN_SEND_TRANSPORT; goto done; }
     if (r.protocol != GIN_PROTOCOL_OK) { r.code = GIN_SEND_PROTOCOL; goto done; }
     r.auth_attempted = 1;
-    r.auth = gin_auth_identity(&s->auth, credential, &verified);
+    r.auth = control ? gin_auth_identity_controlled(&s->auth,credential,&verified,control) :
+        gin_auth_identity(&s->auth,credential,&verified);
+    if (send_control_abort(control)) { r.code=GIN_SEND_TRANSPORT; goto done; }
     if (r.auth != GIN_AUTH_OK) { r.code = GIN_SEND_AUTH; goto done; }
     http.url = url; http.ca_file = s->auth.ca_file;
     http.connect_ms = s->auth.connect_ms; http.total_ms = s->auth.total_ms;
@@ -68,7 +83,9 @@ struct gin_send_result gin_send_plain(const struct gin_root *root,
     request.bearer = verified.token; request.bearer_origin = verified.origin;
     request.json_body = json; request.json_length = json_length;
     r.post_attempted = 1; r.outcome = GIN_SEND_UNCERTAIN;
-    response = gin_http_request(&request, reply, GIN_SEND_RESPONSE_MAX);
+    response = control ? gin_http_request_controlled(&request,reply,GIN_SEND_RESPONSE_MAX,control) :
+        gin_http_request(&request,reply,GIN_SEND_RESPONSE_MAX);
+    if (send_control_abort(control)) { r.code=GIN_SEND_TRANSPORT; goto done; }
     r.http_status = response.http_status;
     switch (response.code) {
     case GIN_HTTP_OK:
@@ -89,6 +106,15 @@ done:
     free(path);
     return r;
 }
+struct gin_send_result gin_send_plain(const struct gin_root *root,
+    const struct gin_send_settings *s, const struct gin_credential *credential,
+    const struct gin_send_route *route, uint64_t id, const unsigned char *body, size_t length)
+{ return send_plain(root,s,credential,route,id,body,length,NULL); }
+struct gin_send_result gin_send_plain_controlled(const struct gin_root *root,
+    const struct gin_send_settings *s, const struct gin_credential *credential,
+    const struct gin_send_route *route, uint64_t id, const unsigned char *body, size_t length,
+    struct gin_http_control *control)
+{ return send_plain(root,s,credential,route,id,body,length,control); }
 const char *gin_send_error(enum gin_send_code code)
 {
     static const char *const names[] = {"ok", "invalid", "unsupported", "limit", "out-of-memory",

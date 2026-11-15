@@ -42,6 +42,13 @@ class Handler(startup.Handler):
             assert self.headers.get('Authorization') == 'Bearer ' + startup.TOKEN
             body = {'networks': [{'id': 3000000001, 'slug': 'NetA', 'nick': 'OwnA'}],
                     'channels': {'NetA': [{'name': '#Room', 'joined': True, 'source': 'joined'}]}, 'heads': {}}
+        elif self.path == ('/networks/NetA/channels/' +
+                           ('Peer' if srv.query else '%23Room') +
+                           '/messages?limit=200&after=0'):
+            # Retained history is empty independently of the gated live frames.
+            assert self.headers.get('Authorization') == 'Bearer ' + startup.TOKEN
+            assert srv.paths[-3:-1] == ['/api/config', '/me'], 'history lacks fresh preflight'
+            body = []
         elif self.path.startswith('/socket/websocket?'):
             self.upgrade()
             return
@@ -316,7 +323,9 @@ class ReceptionTracer(unittest.TestCase):
                     time.sleep(.1)
                     self.assertIsNone(proc.poll())
             self.assertEqual(server.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                '/socket/websocket?vsn=2.0.0&client_proto=36'])
+                '/socket/websocket?vsn=2.0.0&client_proto=36', '/api/config', '/me',
+                '/networks/NetA/channels/' + ('Peer' if query else '%23Room') +
+                '/messages?limit=200&after=0'])
             self.assertEqual(server.joins, ['grappa:user:Alice', 'grappa:user:Alice/network:NetA',
                 'grappa:user:Alice/network:NetA/channel:' + ('peer' if query else '#room')] +
                 (['grappa:user:Alice/network:NetA/channel:owna'] if query else []))

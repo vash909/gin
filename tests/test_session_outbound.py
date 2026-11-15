@@ -9,6 +9,8 @@ import json
 import os
 import select
 import signal
+import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -24,6 +26,44 @@ TEXT = 'hello from FIFO'
 PREFIX = b'existing prefix\n'
 BEFORE = b'[1970-01-01T00:00:00.000Z] action sender="Nick" body="before-fifo"\n'
 AFTER = b'[1970-01-01T00:00:00.000Z] action sender="Nick" body="after-fifo"\n'
+
+
+BOOT = ['/api/config', '/me', '/boot', '/api/config', '/me',
+        '/socket/websocket?vsn=2.0.0&client_proto=36', '/api/config', '/me',
+        '/networks/NetA/channels/%23Room/messages?limit=200&after=0']
+
+
+def wait_checkpoint(test, proc, output, expected, timeout):
+    # Appending the golden output does not imply metadata publication completed.
+    checkpoint = output.with_name('.gin.checkpoint')
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            metadata = checkpoint.lstat()
+        except FileNotFoundError:
+            metadata = None
+        if metadata is not None:
+            test.assertTrue(stat.S_ISREG(metadata.st_mode))
+            test.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
+            test.assertEqual(metadata.st_uid, os.geteuid())
+            test.assertEqual(metadata.st_nlink, 1)
+            data = checkpoint.read_bytes()
+            test.assertGreaterEqual(len(data), 56)
+            test.assertLessEqual(len(data), 8192)
+            test.assertEqual(data[:8], b'GINCP\x00\x00\x01')
+            anchor, unknown, device, inode, size, key_size = struct.unpack_from('>6Q', data, 8)
+            test.assertEqual((anchor, unknown), (0, 1))
+            test.assertEqual(len(data), 56 + key_size)
+            test.assertNotIn(startup.TOKEN.encode(), data)
+            output_metadata = output.stat()
+            test.assertEqual((device, inode), (output_metadata.st_dev, output_metadata.st_ino))
+            test.assertLessEqual(size, len(expected), 'checkpoint advanced beyond expected output')
+            if size == len(expected):
+                test.assertEqual(output.read_bytes(), expected)
+                return
+        test.assertIsNone(proc.poll(), 'owner stopped before checkpoint publication')
+        test.assertLess(time.monotonic(), deadline, 'successful output checkpoint was not published')
+        time.sleep(.01)
 
 
 def budget(native):
@@ -187,19 +227,25 @@ class OutboundTracer(unittest.TestCase):
             ready_read, ready_write = os.pipe()
             os.set_blocking(ready_read, False)
             os.set_blocking(ready_write, False)
+            operation_read, operation_write = os.pipe()
+            os.set_blocking(operation_read, False)
+            os.set_blocking(operation_write, False)
+            self.operation_data = b''
             settings = self.certdir / 'outbound-settings'
             settings.write_text('connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=180000\n' if startup.PREFIX else '')
             settings.chmod(0o600)
             proc = subprocess.Popen(self.command('connect', '-f', settings, '-d', root, '-n', 'NetA',
                 '-c', '#Room', '-e', origin, '-m', 'plain', '-a', self.certdir / 'ca.pem',
-                '-R', ready_write), pass_fds=(ready_write,), stdin=subprocess.DEVNULL,
+                '-R', ready_write, '-O', operation_write), pass_fds=(ready_write, operation_write), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             os.close(ready_write)
+            os.close(operation_write)
             writer = -1
             try:
                 self.assertTrue(select.select([ready_read], [], [], budget(8))[0], 'no correlated READY')
                 self.assertEqual(os.read(ready_read, 128), b'READY\n')
                 self.wait_output(proc, output, BEFORE)
+                wait_checkpoint(self, proc, output, PREFIX + BEFORE, budget(8))
                 try:
                     writer = os.open(output.with_name('in'), os.O_WRONLY | os.O_NONBLOCK)
                 except OSError as error:
@@ -213,6 +259,7 @@ class OutboundTracer(unittest.TestCase):
                 self.assertNotIn(TEXT.encode(), output.read_bytes(), 'input was echoed without a server event')
                 srv.release_after.set()
                 self.wait_output(proc, output, AFTER)
+                wait_checkpoint(self, proc, output, PREFIX + BEFORE + AFTER, budget(8))
                 data = output.read_bytes()
                 self.assertTrue(data.startswith(PREFIX + BEFORE))
                 self.assertLess(data.index(BEFORE), data.index(AFTER))
@@ -220,13 +267,26 @@ class OutboundTracer(unittest.TestCase):
                 self.assertEqual(output.stat().st_ino, inode)
                 self.assertEqual(list(root.rglob('out')), [output], 'nonselected output fan-out')
                 self.assertEqual(len(srv.posts), 1, 'outgoing operation replayed')
-                self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                    '/socket/websocket?vsn=2.0.0&client_proto=36', '/api/config', '/me',
+                self.assertEqual(srv.paths, BOOT + ['/api/config', '/me',
                     '/networks/NetA/channels/%23Room/messages'])
+                # Live reception may precede HTTP outcome classification. A
+                # server write or incoming event is not a terminal SEND receipt.
+                receipt_deadline = time.monotonic() + budget(8)
+                while self.operation_data.count(b'\n') < 2:
+                    remaining = receipt_deadline - time.monotonic()
+                    self.assertGreater(remaining, 0, 'terminal SEND receipt deadline')
+                    self.assertTrue(select.select([operation_read], [], [], remaining)[0],
+                                    'terminal SEND receipt missing before stop')
+                    chunk = os.read(operation_read, 4096)
+                    self.assertTrue(chunk, repr(self.operation_data))
+                    self.operation_data += chunk
+                self.assertEqual(self.operation_data,
+                    b'OP1 1 SEND PENDING 0\nOP1 1 SEND ACCEPTED_PERSISTED 0\n')
                 proc.send_signal(signal.SIGTERM)
                 stdout, stderr = proc.communicate(timeout=budget(12))
                 self.assertEqual(proc.returncode, 0)
                 self.assertEqual(stdout + stderr, b'')
+                self.assertEqual(os.read(operation_read, 4096), b'', 'duplicate terminal operation')
                 self.assertEqual(credential.read_bytes(), original_credential)
             finally:
                 srv.stopped.set()
@@ -238,6 +298,7 @@ class OutboundTracer(unittest.TestCase):
                     proc.kill()
                 proc.communicate(timeout=budget(10))
                 os.close(ready_read)
+                os.close(operation_read)
 
 
 if __name__ == '__main__':

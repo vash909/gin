@@ -84,7 +84,11 @@ class OwnerFaults(unittest.TestCase):
                 self.assertEqual(proc.returncode, 1 if fault else 0, stderr)
                 self.assertEqual(stdout, b'')
                 self.assertEqual(stderr, b'gin: session I/O failure\n' if fault else b'')
-                self.assertEqual(len(srv.paths), 6)
+                self.assertEqual(srv.paths, [
+                    '/api/config', '/me', '/boot', '/api/config', '/me',
+                    '/socket/websocket?vsn=2.0.0&client_proto=36',
+                    '/api/config', '/me',
+                    '/networks/NetA/channels/%23Room/messages?limit=200&after=0'])
                 self.assertEqual(next(root.rglob('out')).read_bytes(), b'')
                 self.assertEqual(credential.read_bytes(), original)
             finally:

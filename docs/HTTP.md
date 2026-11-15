@@ -3,8 +3,9 @@
 The [verified-WSS native connection API](CONNECT.md) provides root-first
 subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
 composes verified startup and live selected-window plaintext reception in the
-CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
-interoperability is claimed.
+CLI, including FIFO send/control, native liveness and bounded history/restart
+recovery in the 18.4 development candidate. Qualification remains pending; no
+live Grappa interoperability or E2EE is claimed.
 
 ## Actual scope
 
@@ -16,9 +17,15 @@ protocols, implement WebSockets or deliver messages. Response bodies
 are opaque bytes, including NUL. The installed native CLI includes `connect`,
 `connect-check`, and `credential-import`; `gin run` remains local-only and
 fails closed on sending. Low-level HTTP callbacks must remain bounded and
-nonblocking; synchronous HTTP calls run outside runtime callbacks. Chat
-projection, message sending, reconnection, history, and E2EE integration
-remain deferred and require separately reviewed scheduling/lifecycle work.
+nonblocking; synchronous HTTP calls run outside runtime callbacks. The connected
+owner composes chat projection, sending, finite reconnection and history. E2EE
+remains unsupported; encryption/identity/role failures never enable fallback.
+Controlled HTTP is the sole blocking waiter during live requests: it services
+native WSS and bounded owned metadata outside curl callbacks and reduces waits
+against native deadlines. Stop/stdin/deadline checks cover initial and recovery
+HTTP too; this is cooperative scheduling, not a hard real-time DNS/TLS bound.
+An operation's terminal OP1 receipt precedes fresh recovery HTTP, never replaying
+a mutation. See [session ownership and recovery](SESSION.md) for the limits.
 
 ## API and ownership
 

@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tests'))
@@ -63,6 +64,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = {'networks': [{'id': 3000000001, 'slug': 'NetA', 'nick': 'OwnA'}],
                     'channels': {'NetA': [{'name': '#Room', 'joined': True, 'source': 'joined'}]},
                     'heads': {}}
+        elif urlsplit(self.path).path == '/networks/NetA/channels/%23Room/messages':
+            # This base fixture has no retained channel history. Admit exactly
+            # its initial focused request, never an arbitrary resource/cursor.
+            assert self.headers.get('Authorization') == 'Bearer ' + TOKEN
+            assert srv.paths[-3:-1] == ['/api/config', '/me'], 'history lacks fresh preflight'
+            query = parse_qs(urlsplit(self.path).query, strict_parsing=True)
+            assert query == {'limit': ['200'], 'after': ['0']}
+            body = []
         elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=36':
             self.upgrade()
             return
@@ -207,7 +216,8 @@ class StartupTracer(unittest.TestCase):
                 self.assertEqual(os.read(read_fd, 128), b'READY\n', 'invalid readiness record')
                 self.assertIsNone(proc.poll(), 'READY was not a live foreground session')
                 self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                    '/socket/websocket?vsn=2.0.0&client_proto=36'])
+                    '/socket/websocket?vsn=2.0.0&client_proto=36', '/api/config', '/me',
+                    '/networks/NetA/channels/%23Room/messages?limit=200&after=0'])
                 self.assertEqual(srv.joins, ['grappa:user:Alice', 'grappa:user:Alice/network:NetA',
                     'grappa:user:Alice/network:NetA/channel:#room'])
                 srv.client_close_expected.set()

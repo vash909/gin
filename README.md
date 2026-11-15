@@ -22,12 +22,14 @@ inspired by [ii](https://tools.suckless.org/ii/). Portable C99 and POSIX.1-2008;
 ordinary files and named pipes instead of another chat UI. Supported target
 platforms are Linux (glibc/musl) and FreeBSD.
 
-**Status: connected plaintext reception for one selected window; not a beta.**
+**Status: 18.4 development candidate for one selected plaintext window; not a beta.**
 The executable initializes a private filesystem tree and validates explicit
 CLI/configuration settings. `gin credential-import` explicitly enrolls a bearer
 from a private file; `gin connect` owns verified HTTPS/WSS startup and appends
-eligible live plaintext records to the selected window's log. Connected FIFO
-sending/control, reconnect, history recovery and E2EE remain deferred. See the
+eligible plaintext records to the selected window's log. FIFO sending/control,
+heartbeat, finite reconnect and bounded history/restart recovery are integrated
+in this candidate, with automatic private checkpoints and no outgoing replay.
+18.4 qualification is pending; E2EE remains deferred. See the
 [startup and live-reception contract](docs/SESSION.md). `gin run` remains a local-only
 foreground FIFO reader with orderly signal shutdown and one held root lock.
 It announces transport unavailability and fails with exit 1 on the first
@@ -136,11 +138,13 @@ milestone after all four operational-integration steps.
   the isolated [verified-WSS connection API](docs/CONNECT.md) adds root-first
   correlated subscriptions through libcurl. Session startup is wired into the
   production CLI together with selected-window plaintext projection; connected
-  send/control/recovery integration remains future work.
+  send/control, liveness and bounded recovery are composed in this development
+  candidate.
 - Speak Grappa's documented REST/Phoenix contract and terminology; keep the
   upstream revision and compatibility requirements explicit.
-- E2EE is deferred, **not TLS**. Encrypted conversations must eventually be
-  rejected clearly until supported, never silently downgraded to plaintext.
+- E2EE is deferred, **not TLS**. Recognized encrypted/unknown modes and reserved
+  encrypted content fail closed, never silently downgraded to plaintext. This is
+  not complete ciphertext detection or server attestation of the plain assertion.
 - No live server, credentials or real messages are used by scaffold tests.
 
 ## Development
@@ -182,12 +186,16 @@ bounded records. The connected owner now uses it for selected-window plaintext
 reception and checked append through its held root, outside transport callbacks.
 Native loopback HTTPS/WSS fixtures are not live Grappa qualification.
 
-The opt-in [native liveness API](docs/LIVENESS.md) adds Phoenix heartbeats,
+The [native liveness API](docs/LIVENESS.md), driven by `connect`, adds Phoenix
+heartbeats,
 monotonic deadlines, finite owner-driven reconnect scheduling and fail-closed
 session-severance handling. It never silently replays user operations or makes
 `gin run` connected; live qualification remains future work.
 
-The isolated [history and bounded gap-recovery APIs](docs/HISTORY.md) add ID-only
+The [history and bounded gap-recovery APIs](docs/HISTORY.md), composed by
+`connect`, add ID-only
 pagination, owned REST/live rows and scoped identity deduplication. Buffered live
-IDs never skip the REST catch-up cursor. Visible drain is not proof of complete
-original history, durability or exactly-once output; `gin run` remains local-only.
+IDs never skip the REST catch-up cursor. Automatic selected-window checkpoints
+record only successfully appended REST-eligible progress, not maximum live IDs.
+Restart/reconnect can duplicate an incoming tail. Visible drain is not proof of
+complete original history, durability or exactly-once output; `gin run` remains local-only.

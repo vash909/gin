@@ -5,9 +5,12 @@
 The separate connected `connect`, read-only `connect-check` and private
 `credential-import` commands use a different settings format. See
 [operational startup/session](SESSION.md) for the complete grammar, private
-store selection, C36/R36 policy, readiness/operation pipes and deferred
-cancellation limits. `connect` receives selected-window logs and dispatches
-FIFO SEND/JOIN/PART/QUERY. Automatic reconnect and history remain unwired.
+store selection, C36/R36 policy, readiness/operation pipes and cooperative
+cancellation limits. The 18.4 development candidate receives selected-window
+logs, dispatches FIFO SEND/JOIN/PART/QUERY and drives finite reconnect, bounded
+history catch-up and automatic private checkpoints. Qualification remains
+pending; outgoing commands are never automatically replayed. Local `run`
+remains offline.
 
 The remainder of this document describes the legacy local commands.
 

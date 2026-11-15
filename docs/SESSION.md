@@ -4,9 +4,10 @@
 commands backed by the native authentication, discovery, topology and verified
 WSS APIs. `connect` appends eligible live plaintext records for **only the
 selected network/window**, reads its FIFO and dispatches SEND/JOIN/PART/QUERY.
-Reconnect and history recovery remain unwired; this is not a beta or complete
-messaging client. The old `init`, `check` and local-only `run` retain their
-behavior and four-key settings format. No existing invocation silently starts
+This 18.4 development candidate also drives native liveness, bounded reconnect,
+history catch-up and automatic restart checkpoints. Qualification remains pending;
+this is not a beta or a claim that all 18.4 acceptance criteria are complete.
+The old `init`, `check` and local-only `run` retain their behavior and four-key settings format. No existing invocation silently starts
 network access. Tests use synthetic loopback authorities, not a live Grappa
 server; interoperability remains unqualified.
 
@@ -78,10 +79,17 @@ connect_ms=1500
 total_ms=3000
 join_ms=3000
 startup_ms=30000
+heartbeat_interval_ms=30000
+heartbeat_timeout_ms=10000
+retry_base_ms=1000
+retry_cap_ms=30000
+max_retries=5
 ```
 
 Exact permitted keys are `root`, `network`, `target`, `chantypes`, `origin`,
-`mode`, `ca_file`, `connect_ms`, `total_ms`, `join_ms`, `startup_ms`. Existing
+`mode`, `ca_file`, `connect_ms`, `total_ms`, `join_ms`, `startup_ms`,
+`heartbeat_interval_ms`, `heartbeat_timeout_ms`, `retry_base_ms`, `retry_cap_ms`,
+`max_retries`. Existing
 local naming bounds still apply; origin is at most 1024 bytes, CA path at most
 4095 and mode at most 15. Origin must be an exact lowercase HTTPS authority,
 without userinfo, path, query or fragment. Only explicit `mode=plain` is accepted.
@@ -99,7 +107,10 @@ is `#`; the root/network/target/origin/plain assertion must be provided.
 
 Timers are canonical positive decimal milliseconds: connect, total and join
 are <=60000; startup is <=600000; effective total must be >=connect. The defaults
-shown above are operational settings, not test-only switches. `connect-check`
+shown above are operational settings, not test-only switches. Heartbeat/backoff
+values are positive canonical milliseconds within the native [liveness](LIVENESS.md)
+policy, with retry base <= cap; only `max_retries` permits canonical zero to
+disable retries. These are settings keys, not additional CLI flags. `connect-check`
 validates only the file and effective lexical settings: no root/store/lock/CA/fd
 probe, HTTP request, socket, mkdir, FIFO open or log write. A nonexistent CA or
 unopened but syntactically valid status fd can pass check and fail connect.
@@ -108,8 +119,13 @@ unopened but syntactically valid status fd can pass check and fail connect.
 
 The owner is fixed to one selected root/network/window. It acquires one root
 once, retains the credential and keeps that root through all session resources.
-Before READY it initializes the selected window if needed and opens its FIFO
-reader. Existing logs are preserved; a missing selected log is created empty.
+Existing selected output/checkpoint state is checked before output admission.
+A legitimately absent selected window starts transient unknown-baseline staging;
+creation waits for current native readiness, all joins, route authority and
+receive drain. A valid new layout may create its expected network/window
+directories; existing state must still pass the filesystem checks, without
+unsafe-path repair. Before first READY, catch-up is published and the
+selected FIFO reader is opened. Existing log bytes/inodes are preserved.
 It does not call the old local runtime or acquire a second root handle. Other
 discovered windows and control arguments do not create additional output trees.
 HTTP initialization/cleanup surrounds all users. A configured CA must be a
@@ -128,7 +144,7 @@ canonical targets and local components remain distinct.
 Connected startup and credential-import declare **C=36, R=36**. This conservative
 receive subset requires the pinned protocol-36 `dm_with` evidence, not just the
 protocol-4 `/boot` shape. It does not implement every feature through 36, declare
-captured upstream current63 or wire the native history APIs into this owner.
+captured upstream current63. History is integrated under the same plaintext subset.
 Standalone native APIs still take explicit caller policy.
 Checks are independently C>=server minimum and server current>=R, plus the root
 join protocol floor. A higher additive server current version is not rejected
@@ -186,10 +202,12 @@ Output uses descriptor-relative private-window guards and checked append through
 the one held root. Existing bytes/inodes are preserved; no truncate, path repair,
 credential/payload diagnostic dump or automatic migration is attempted.
 
-A rendering, required-subscription, established-query-route or output failure is
-terminal. Checked append accounts for a written prefix: an error can leave that
-prefix in the log. There is no rollback, automatic replay, crash-atomic append,
-durable checkpoint or exactly-once guarantee. Explicit `mode=plain` remains an
+Rendering, invalid required-subscription authority, established-query-route and
+output failures are terminal; only eligible native transport failures may recover.
+Checked append accounts for a written prefix: an error can leave that prefix in
+the log. There is no rollback, automatic replay, crash-atomic append,
+durability or exactly-once guarantee; private checkpoint replacement is not
+transactional with append. Explicit `mode=plain` remains an
 owner assertion; it is not complete encrypted-content detection or server
 attestation, and there is no automatic plaintext downgrade or decryption.
 
@@ -205,7 +223,9 @@ the owner; empty records are ignored. No local echo or implicit retry occurs.
 One bounded framing quantum runs per turn after WSS service, full owned-queue
 projection and current receive drain, never through unfinished TEXT. A pending
 query blocks further FIFO admission until its correlated terminal receipt is
-taken. Commands do not replace the selected destination.
+taken. Startup/reconnect catch-up also blocks FIFO admission until the staged,
+visibly drained output prefix has been published. Commands do not replace the
+selected destination.
 
 SEND uses the original selected wire target/role. SEND/JOIN/PART run fresh
 anonymous config, UUID-bound `/me` and one typed HTTP mutation outside callbacks,
@@ -263,18 +283,21 @@ processing or safe automatic resend.
 ## Shutdown, EOF and deadline limits
 
 SIGINT/SIGTERM request orderly stop. Handlers only set a flag and write an
-errno-preserving nonblocking wake byte. Existing synchronous aggregate fetch,
-start and send/control APIs are **not immediately cancellable**: later internal
-requests can occur before an entered aggregate returns. The owner checks stop
-between phases, after service and again after PENDING before HTTP/query
-submission. This deterministic boundary is not atomic network cancellation.
+errno-preserving nonblocking wake byte. Controlled startup, native connection,
+mutation and recovery HTTP service stop/stdin/deadline checks between work and
+waits. During live HTTP, HTTP is the sole blocking waiter; native WSS service and
+bounded owned metadata projection run outside curl callbacks, with waits reduced
+against native deadlines. This is cooperative cancellation, not atomic network
+cancellation or a hard real-time DNS/TLS bound. An entered mutation can remain
+UNCERTAIN; stop does not undo remote effects.
 The 50ms service wait is a scheduling quantum, not a hard duration guarantee.
 Deadlines do not bound filesystem stalls, resolver cleanup or scheduling.
 
 Without `-E`, stdin is ignored, including `/dev/null`. Explicit `-E` requires an
-already nonblocking stdin pipe read end: only an observed zero-byte read is an
-orderly stop. Buffered data fails; HUP alone is not EOF. Stdin is not a command
-pipe and its descriptor flags are unchanged.
+already nonblocking stdin pipe read end: only an observed zero-byte read is a
+latched orderly stop, even if a FIFO writer later reopens. Buffered data fails;
+HUP alone is not EOF. Stdin is not a command pipe and its descriptor flags are
+unchanged.
 
 Clean FIFO writer EOF is different: the owner retains its reader and applies a
 checked 100ms monotonic cooldown, without close/reopen or busy-spinning. A partial
@@ -282,7 +305,9 @@ record at EOF is rejected as invalid input and terminates the owner; it is not
 joined to a later writer's bytes.
 
 Teardown frees transport, snapshots and owned metadata, clears owned credential
-copies, cleans HTTP, closes children, restores signal actions, releases the root and finally
+copies and closes private checkpoint descriptors before the borrowed output.
+It cleans HTTP, closes children, restores signal actions, releases the held root
+and finally
 restores the caller mask. Wake ends stay valid while the handler can
 write. Close is not retried; the persistent lock is never unlinked. Cleanup
 failures are surfaced, not hidden by successful earlier phases. Regular stderr
@@ -296,12 +321,42 @@ CLI/settings; exit1 is runtime/unsafe-file/credential/TLS/protocol/route/status/
 input/resource/cleanup failure. Stopping does not automatically logout/PART,
 delete credentials or remove/rename any existing logs.
 
-## What remains outside this owner
+## Integrated liveness and recovery (18.4 candidate)
 
-Heartbeat/reconnect/history/restart integration is 18.4 and remains unwired.
-Native adapters do not enable these features through `connect`. The owner does
-not decrypt or claim complete encrypted-content detection; only the explicit
-plaintext subset is supported. No auto retry or outgoing replay is enabled.
-Without Phoenix heartbeat policy, there is **no sustained healthy-session
-lifetime promise**: server close is terminal. There is no live qualification,
-E2EE, exactly-once persistence, recipient-delivery guarantee or beta claim.
+Native heartbeat and finite owner-driven backoff use the configured lifetime
+retry budget; ordinary traffic and history do not reset it. Eligible native
+transport failures can resubscribe after fresh bound topology/startup checks.
+Before any first fresh recovery HTTP request, every active command's terminal
+OP1 outcome must already be published when `-O` is enabled. No SEND, QUERY, JOIN
+or PART is replayed; a selected PART remains terminal. Query ACK is not inventory
+authority. Failed receipt publication prevents recovery rather than hiding effects.
+
+Before the first READY, even a quiet window catches up from its positive stored
+processing anchor or validated missing metadata (`after=0`, UNKNOWN). No first
+live message is required. Catch-up stages REST/live overlap before append and
+blocks FIFO admission. A fresh actual native epoch discards old uncommitted
+staging/live IDs and binds the new attempt to the actual epoch and own nick,
+while preserving committed progress and the same held root/output.
+
+An eligible native failure during initial history may consume an unused retry
+only after old-authority metadata drain. HTTP/auth/decode/output/limit failures,
+stop and deadline expiry are not blind-retry authority. Retries retain the
+original initial deadline or current recovery-episode deadline; they do not
+restart it. Each history attempt has a cooperative 60s admission budget, not a
+hard real-time resolver/TLS limit. The planner's page/row/byte bounds and the
+additional ID-less staging limits are documented in [HISTORY.md](HISTORY.md).
+
+Automatic `.gin.checkpoint` metadata beside the selected `out` is private local
+state, not a protocol, public API or user-editable anchor. Its validated missing
+entry is distinct from malformed/unsafe state, scope mismatch or output inode/
+size ambiguity: those stop without append, truncation or silent repair. See
+[checkpoint ownership and failure limits](HISTORY.md#automatic-connected-checkpoints).
+Incoming duplicate tails remain possible after reconnect/restart; neither gap
+completeness nor exactly-once output, durability or recipient delivery is promised.
+
+## Remaining qualification
+
+18.4 is IN PROGRESS: final-source review, installed workflow, full supported-platform
+and required-CI qualification remain pending. Local loopback evidence is not live
+Grappa interoperability. E2EE and complete encrypted-content detection remain
+unsupported; role/identity/encryption failures never enable plaintext fallback.

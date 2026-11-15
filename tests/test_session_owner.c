@@ -125,9 +125,40 @@ static void pipe_capabilities(void)
     assert(unlink(path) == 0 && rmdir(base) == 0);
     assert(descriptor_count() == before);
 }
+static void stdin_eof_handoff(void)
+{
+    char base[4096], path[4096], byte;
+    struct owner o;
+    enum gin_session_code code=GIN_SESSION_OK;
+    int reader, writer, flags, fdflags, before=descriptor_count();
+    scratch_directory(base,sizeof(base),"gin-session-stdin-handoff");
+    assert(snprintf(path,sizeof(path),"%s/fifo",base)>0);
+    assert(mkfifo(path,0600)==0);
+    reader=open(path,O_RDONLY|O_NONBLOCK); assert(reader>=0);
+    writer=open(path,O_WRONLY|O_NONBLOCK); assert(writer>=0);
+    flags=fcntl(reader,F_GETFL); fdflags=fcntl(reader,F_GETFD);
+    assert(flags>=0 && fdflags>=0 && !session_stopping);
+    assert(write(writer,"x",1)==1 && read(reader,&byte,1)==1 && byte=='x');
+    assert(close(writer)==0);
+    assert(read(reader,&byte,1)==0); /* Actual EOF, not HUP speculation. */
+    owner_init(&o); o.input=reader;
+    assert(owner_stop(&o,&code)==1 && code==GIN_SESSION_OK);
+    writer=open(path,O_WRONLY|O_NONBLOCK); assert(writer>=0);
+    assert(read(reader,&byte,1)<0 && (errno==EAGAIN || errno==EWOULDBLOCK));
+    /* A new writer cannot undo an already observed orderly stop. */
+    assert(owner_stop(&o,&code)==1 && code==GIN_SESSION_OK);
+    assert(write(writer,"y",1)==1);
+    assert(owner_stop(&o,&code)==1 && code==GIN_SESSION_OK);
+    assert(read(reader,&byte,1)==1 && byte=='y');
+    assert(fcntl(reader,F_GETFL)==flags && fcntl(reader,F_GETFD)==fdflags);
+    assert(close(writer)==0 && close(reader)==0);
+    assert(unlink(path)==0 && rmdir(base)==0);
+    assert(descriptor_count()==before);
+}
 static void whitebox(void)
 {
     pipe_capabilities();
+    stdin_eof_handoff();
     static const char *const payloads[] = {
         "{\"kind\":\"query_windows_list\",\"windows\":{}}",
         "{\"windows\":{},\"k\\u0069nd\":\"query_windows_\\u006cist\"}",
@@ -232,7 +263,7 @@ int main(void)
         struct stat st;
         scratch_directory(base, sizeof(base), "gin-session-owner");
         assert(snprintf(root, sizeof(root), "%s/root", base) > 0);
-        memset(&s, 0, sizeof(s));
+        gin_session_settings_init(&s);
         strcpy(s.local.root, root);
         strcpy(s.local.network, "net"); strcpy(s.local.target, "#one");
         strcpy(s.local.chantypes, "#");
@@ -269,7 +300,12 @@ int main(void)
             assert(gin_credential_save(&held, &value) == GIN_CREDENTIAL_OK);
             gin_credential_clear(&value); assert(gin_root_release(&held) == 0);
         }
+        /* One-shot transport failure and retry/deadline expiration are
+         * separate policies; do not inherit the initializer's retry budget. */
+        s.max_retries=0;
         assert(gin_session_run(&s, -1, 0) == GIN_SESSION_TOPOLOGY);
+        s.max_retries=1;
+        assert(gin_session_run(&s, -1, 0) == GIN_SESSION_TIMEOUT);
 
     }
 #endif
