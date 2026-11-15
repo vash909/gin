@@ -6,11 +6,14 @@ from pathlib import Path
 import select
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 from typing import Any, cast
 
 import test_session_checkpoint_catchup as catchup
@@ -21,6 +24,7 @@ class HeldRequest:
     def __init__(self, anchor):
         self.anchor = anchor
         self.entered, self.release, self.finished = (threading.Event() for _ in range(3))
+        self.cancelled = threading.Event()
         self.thread = None
         self.emitted = False
 
@@ -54,6 +58,9 @@ class Handler(reconnect.Handler):
                 request.emitted = True  # Not a client receipt.
             except (BrokenPipeError, ConnectionResetError):
                 assert index == 0 or srv.stopped.is_set(), 'new history transport failed'
+            except ssl.SSLEOFError:
+                if index != 0 or not request.cancelled.is_set():
+                    raise
             finally:
                 self.close_connection = True
                 request.finished.set()
@@ -63,6 +70,73 @@ class Handler(reconnect.Handler):
     def do_POST(self):
         cast(Any, self.server).posts.append(self.path)
         raise AssertionError('unexpected outbound application POST')
+
+
+class HeldRequestTransportGuard(unittest.TestCase):
+    def exercise(self, index, cancelled, error, allowed=False, strict=False):
+        requests = [HeldRequest(18), HeldRequest(20)]
+        request = requests[index]
+        if cancelled:
+            request.cancelled.set()
+        request.release.set()
+        server = SimpleNamespace(requests=requests, history=requests[:index],
+            paths=['/api/config', '/me'], stopped=threading.Event())
+        handler = cast(Any, Handler.__new__(Handler))
+        handler.server = server
+        handler.path = '/networks/NetA/channels/%23Room/messages?limit=200&after=0'
+        handler.headers = {'Authorization': 'Bearer ' + reconnect.startup.TOKEN}
+        handler.request_version = 'HTTP/1.1'
+        handler.requestline = 'GET ' + handler.path + ' HTTP/1.1'
+        handler.command = 'GET'
+        handler.wfile = Mock()
+        handler.wfile.write.side_effect = error
+        if allowed:
+            handler.do_GET()
+        elif strict:
+            with self.assertRaisesRegex(AssertionError, 'new history transport failed'):
+                handler.do_GET()
+        else:
+            with self.assertRaises(type(error)) as caught:
+                handler.do_GET()
+            self.assertIs(caught.exception, error)
+        handler.wfile.write.assert_called_once()  # Real end_headers/flush_headers path.
+        self.assertTrue(request.entered.is_set())
+        self.assertTrue(request.finished.is_set())
+        self.assertTrue(handler.close_connection)
+        self.assertFalse(request.emitted)
+
+    def test_cancelled_first_tls_eof_allowed(self):
+        self.exercise(0, True, ssl.SSLEOFError('injected EOF'), allowed=True)
+
+    def test_cancellation_marker_is_request_local_and_initially_clear(self):
+        first, second = HeldRequest(18), HeldRequest(20)
+        self.assertFalse(first.cancelled.is_set())
+        self.assertFalse(second.cancelled.is_set())
+        first.cancelled.set()
+        self.assertFalse(second.cancelled.is_set())
+
+    def test_first_tls_eof_before_marker_fails(self):
+        self.exercise(0, False, ssl.SSLEOFError('injected EOF'))
+
+    def test_second_tls_eof_fails_even_if_marked(self):
+        for marked in (False, True):
+            with self.subTest(marked=marked):
+                self.exercise(1, marked, ssl.SSLEOFError('injected EOF'))
+
+    def test_unrelated_errors_fail_even_if_cancelled(self):
+        for error in (ssl.SSLError('other TLS'), OSError('other IO'), ValueError('other failure')):
+            with self.subTest(error=type(error).__name__):
+                self.exercise(0, True, error)
+
+    def test_existing_first_broken_transport_allowed_without_marker(self):
+        for error in (BrokenPipeError('pipe'), ConnectionResetError('reset')):
+            with self.subTest(error=type(error).__name__):
+                self.exercise(0, False, error, allowed=True)
+
+    def test_existing_second_broken_transport_still_fails(self):
+        for error in (BrokenPipeError('pipe'), ConnectionResetError('reset')):
+            with self.subTest(error=type(error).__name__):
+                self.exercise(1, True, error, strict=True)
 
 
 class HistoryRetry(reconnect.ReconnectFixture):
@@ -157,6 +231,8 @@ class HistoryRetry(reconnect.ReconnectFixture):
                 until(lambda: bool(select.select([rr], [], [], 0)[0]), 'first READY missing')
                 self.assertEqual(os.read(rr, 128), b'READY\n')
                 saved_cp = cp.read_bytes()
+                # Only the superseded request may encounter the known TLS close.
+                first.cancelled.set()
                 first.release.set()
                 self.assertTrue(first.finished.wait(2), 'old HTTP handler did not finish')
                 time.sleep(.1)

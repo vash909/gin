@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import test_connect as connect
 from ws_fixture_frames import server_frame, take_client_frame
@@ -55,15 +56,18 @@ class Handler(connect.Handler):
             reply = [jr, active_ref, topic, "phx_reply", {"status":"ok", "response":{}}]
             snapshot = [None, None, topic, "event", {"kind":"query_windows_list", "windows":{"7":[{"network_id":7,"target_nick":"Bob","opened_at":"fixture"}]}}]
             if srv.mode == "before": emit(snapshot)
-            if srv.mode == "correlated":
+            if srv.mode in ("correlated", "correlated-delayed", "uncorrelated"):
                 for slot, value in [(0,None),(0,"old"),(1,None),(1,"wrong"),(2,"foreign"),(1,jr)]:
                     wrong = list(reply); wrong[slot] = value; wrong[4] = {"status":"error", "response":{}}; emit(wrong)
+            if srv.mode == "correlated-delayed":
+                # Correlation success is not a 150 ms scheduling benchmark.
+                time.sleep(.25)
             if srv.mode in ("error", "unknown"): reply[4]["status"] = "error" if srv.mode == "error" else "future"
             if srv.mode == "malformed": reply[4]["response"] = None
             if srv.mode == "disconnect" or (srv.mode == "reconnect" and srv.upgrades == 1): return
             if srv.mode == "reconnect": emit([srv.joins[0][0], "2", topic, "phx_reply", {"status":"error", "response":{}}])
-            if srv.mode != "silent": emit(reply)
-            if srv.mode == "correlated": emit([jr,"2",topic,"phx_reply",{"status":"error","response":{}}])
+            if srv.mode not in ("silent", "uncorrelated"): emit(reply)
+            if srv.mode in ("correlated", "correlated-delayed"): emit([jr,"2",topic,"phx_reply",{"status":"error","response":{}}])
             if srv.mode == "after": emit(snapshot)
             if srv.mode in ("before", "after"):
                 emit([None,None,topic,"event",{"kind":"query_windows_list","windows":{}}])
@@ -85,7 +89,7 @@ class QueryTests(unittest.TestCase):
         try: yield srv, f"https://127.0.0.1:{srv.server_port}"
         finally: srv.shutdown(); srv.server_close(); t.join(3); self.assertFalse(t.is_alive())
     def test_query_matrix(self):
-        for mode in ("ok","correlated","before","after","error","unknown","malformed","silent","disconnect","config-floor","root-floor","rejected","reconnect"):
+        for mode in ("ok","correlated","correlated-delayed","uncorrelated","before","after","error","unknown","malformed","silent","disconnect","config-floor","root-floor","rejected","reconnect"):
             with self.subTest(mode=mode), self.fixture(mode) as (srv, origin):
                 binary = os.environ.get("GIN_QUERY_DRIVER", str(connect.ROOT / ".build/query_driver"))
                 with tempfile.TemporaryDirectory() as temporary:
