@@ -106,7 +106,7 @@ jobs:
 
   analysis:
     runs-on: ubuntu-24.04
-    # The full instrumented suite exceeded 20 minutes while still progressing.
+    # Static checks and sanitizers have a budget independent of Valgrind.
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,6 +132,23 @@ jobs:
           cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" "-DJANSSON_VERSION_HEX=$jansson_verhex" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
         run: make CC=gcc CURL_CONFIG="$CURL_CONFIG" CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
+
+  valgrind:
+    runs-on: ubuntu-24.04
+    # The combined job exhausted 40 minutes while Valgrind still progressed.
+    # Keep the full ownership and instrumentation sequence in its own budget.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install analysis tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
+      - name: Build native WebSocket curl
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl
+        run: |
+          sh scripts/build-host-curl.sh
+          echo "CURL_CONFIG=$GIN_CURL_PREFIX/bin/curl-config" >> "$GITHUB_ENV"
       - name: Valgrind
         run: |
           make clean
@@ -210,7 +227,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [portable, compatibility, freebsd, analysis]
+    needs: [portable, compatibility, freebsd, analysis, valgrind]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
