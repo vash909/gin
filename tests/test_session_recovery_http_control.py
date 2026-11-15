@@ -6,8 +6,10 @@ import select
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
+import traceback
 import unittest
 from typing import cast
 import test_session as startup
@@ -26,6 +28,8 @@ class Server(reconnect.Server):
     hold_armed: threading.Event
     request_seen: threading.Event
     release_response: threading.Event
+    initial_delay_seen: threading.Event
+    handler_tracebacks: list[str]
 
 
 class Handler(reconnect.Handler):
@@ -46,25 +50,54 @@ class Handler(reconnect.Handler):
         super().do_GET()
 
 
+class SlowInitialHistoryHandler(Handler):
+    def do_GET(self):
+        srv = cast(Server, self.server)
+        if (self.path == '/api/config' and len(srv.paths) == 6 and srv.ws_attempts == 1
+                and not srv.ready_observed.is_set() and not srv.hold_armed.is_set()):
+            # Initial catch-up scheduling must not prevent the recovery test's setup.
+            srv.initial_delay_seen.set()
+            time.sleep(.65)
+        super().do_GET()
+
+
 class RecoveryHttpControl(reconnect.ReconnectFixture):
     checkpoint = catchup.CheckpointCatchup.checkpoint
     handler_class = Handler
 
     @contextlib.contextmanager
     def held_fixture(self, path):
-        with self.fixture('positive') as (base, origin):
-            srv = cast(Server, base)
-            srv.hold_path = path
-            srv.hold_armed, srv.request_seen, srv.release_response = [threading.Event() for _ in range(3)]
-            try:
-                yield srv, origin
-            finally:
-                srv.release_response.set()
+        srv = None
+        try:
+            with self.fixture('positive') as (base, origin):
+                srv = cast(Server, base)
+                srv.hold_path = path
+                srv.hold_armed, srv.request_seen, srv.release_response = [threading.Event() for _ in range(3)]
+                srv.initial_delay_seen = threading.Event()
+                srv.handler_tracebacks = []
+                original_error = srv.handle_error
+
+                def record_error(request, client_address):
+                    assert srv is not None
+                    srv.handler_tracebacks.append(traceback.format_exc().replace(startup.TOKEN, '<redacted>'))
+                    original_error(request, client_address)  # Retain the strict server-error collector.
+
+                srv.handle_error = record_error
+                try:
+                    yield srv, origin
+                finally:
+                    srv.release_response.set()
+        finally:
+            # Handler errors may arrive during the base fixture's shutdown.
+            if srv is not None and srv.errors:
+                print('RECOVERY HANDLER FAILURE: ' + json.dumps({
+                    'paths': srv.paths, 'ready': srv.ready_observed.is_set(),
+                    'hold_armed': srv.hold_armed.is_set(), 'traces': srv.handler_tracebacks}), flush=True)
 
     def run_held(self, path='/api/config', stop=False):
         instrumented = bool(startup.PREFIX)
         with self.held_fixture(path) as (srv, origin):
-            label = path.strip('/').replace('/', '-') + ('-stop' if stop else '-deadline')
+            label = self._testMethodName + '-' + path.strip('/').replace('/', '-') + ('-stop' if stop else '-deadline')
             root = self.certdir / ('recovery-http-' + label)
             init = subprocess.run(self.command('init', '-d', root, '-n', 'NetA', '-c', '#Room'),
                                   capture_output=True, timeout=90 if instrumented else 5)
@@ -76,7 +109,10 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 'subject_id': startup.UUID, 'subject_name': 'Alice'}))
             credential.chmod(0o600)
             old_credential = credential.read_bytes()
-            budget = 180000 if stop else 3000 if instrumented else 500
+            # This configured budget applies to BOTH initial startup and recovery.
+            # Keep native VM setup out of a 500 ms scheduling benchmark; recovery
+            # must still expire within its own configured absolute episode.
+            budget = 180000 if stop else 3000 if instrumented else 2000
             interval, heartbeat_timeout = (1000, 3000) if instrumented else (150, 500)
             config = self.certdir / ('recovery-http-settings-' + label)
             config.write_text(f'startup_ms={budget}\nconnect_ms=10000\ntotal_ms=20000\njoin_ms=12000\n'
@@ -110,14 +146,19 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 old_tree = {str(p.relative_to(root)): p.stat().st_ino for p in root.rglob('*')}
                 srv.hold_armed.set()
                 srv.client_close_expected.set()
+                recovery_started = time.monotonic()
                 srv.active_ws.shutdown(socket.SHUT_RDWR)
                 self.assertTrue(srv.request_seen.wait(15 if instrumented else 3),
                                 'fresh recovery HTTPS phase was never entered')
                 self.assertFalse(srv.release_response.is_set())
                 if stop:
                     proc.send_signal(signal.SIGTERM)
+                # Bound the complete recovery, not another full allowance measured
+                # from entry into whichever held HTTP phase is selected.
+                recovery_limit = recovery_started + budget / 1000 + (3 if instrumented else 1)
+                remaining = (6 if instrumented else 2) if stop else max(.001, recovery_limit - time.monotonic())
                 try:
-                    stdout, stderr = proc.communicate(timeout=6 if instrumented else 2)
+                    stdout, stderr = proc.communicate(timeout=remaining)
                 except subprocess.TimeoutExpired:
                     self.fail('owner remained blocked in recovery HTTPS after stop' if stop else
                               'owner remained blocked beyond recovery episode deadline while HTTPS response was held')
@@ -125,6 +166,8 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 self.assertEqual(proc.returncode, 0 if stop else 1, repr(stderr))
                 self.assertEqual(stdout, b'')
                 self.assertEqual(stderr, b'' if stop else b'gin: startup timeout\n')
+                if not stop:
+                    self.assertLess(time.monotonic(), recovery_limit, 'original recovery episode budget exceeded')
                 self.assertTrue(select.select([rr], [], [], 0)[0])
                 self.assertEqual(os.read(rr, 128), b'', 'additional READY was published during recovery')
                 self.assertEqual(srv.paths, BASE_PATHS + PHASES[:PHASES.index(path) + 1])
@@ -134,11 +177,17 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
                 self.assertEqual(credential.read_bytes(), old_credential)
                 self.assertEqual({str(p.relative_to(root)): p.stat().st_ino for p in root.rglob('*')}, old_tree)
             finally:
+                semantic_failure = sys.exc_info()[0] is not None
                 srv.client_close_expected.set()
                 if proc is not None:
                     if proc.poll() is None:
                         proc.kill()
-                    proc.communicate(timeout=90 if instrumented else 10)
+                    stdout, stderr = proc.communicate(timeout=90 if instrumented else 10)
+                    if semantic_failure:
+                        print('RECOVERY OWNER FAILURE: ' + repr({
+                            'exit': proc.returncode, 'stdout': stdout.replace(startup.TOKEN.encode(), b'<redacted>'),
+                            'stderr': stderr.replace(startup.TOKEN.encode(), b'<redacted>'), 'paths': srv.paths,
+                            'ready': srv.ready_observed.is_set(), 'hold_armed': srv.hold_armed.is_set()}), flush=True)
                 srv.release_response.set()
                 os.close(rr)
                 if rw >= 0:
@@ -146,6 +195,11 @@ class RecoveryHttpControl(reconnect.ReconnectFixture):
             check = subprocess.run(self.command('init', '-d', root, '-n', 'NetA', '-c', '#Room'),
                                    capture_output=True, timeout=90 if instrumented else 5)
             self.assertEqual(check.returncode, 0, 'root lock not released')
+            return srv.initial_delay_seen.is_set()
+
+    def test_delayed_initial_catchup_preserves_recovery_deadline(self):
+        self.handler_class = SlowInitialHistoryHandler
+        self.assertTrue(self.run_held('/me'), 'delayed initial history preflight was not exercised')
 
     def test_held_recovery_config_obeys_original_episode_deadline(self):
         self.run_held()

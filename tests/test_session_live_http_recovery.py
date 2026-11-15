@@ -4,8 +4,6 @@ import os
 import select
 import signal
 import socket
-import stat
-import struct
 import subprocess
 import sys
 import threading
@@ -81,37 +79,7 @@ class LiveHttpRecovery(reconnect.ReconnectFixture):
     handler_class = Handler
 
     def wait_checkpoint(self, proc, output, expected, budget):
-        # An observed append is not a checkpoint-publication barrier. Require
-        # the exact selected-window metadata snapshot before asserting the tree.
-        checkpoint = output.with_name('.gin.checkpoint')
-        deadline = time.monotonic() + budget
-        while True:
-            try:
-                metadata = checkpoint.lstat()
-            except FileNotFoundError:
-                metadata = None
-            if metadata is not None:
-                self.assertTrue(stat.S_ISREG(metadata.st_mode))
-                self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
-                self.assertEqual(metadata.st_uid, os.geteuid())
-                self.assertEqual(metadata.st_nlink, 1)
-                data = checkpoint.read_bytes()
-                self.assertGreaterEqual(len(data), 56)
-                self.assertLessEqual(len(data), 8192)
-                self.assertEqual(data[:8], b'GINCP\x00\x00\x01')
-                anchor, unknown, device, inode, size, key_size = struct.unpack_from('>6Q', data, 8)
-                self.assertEqual((anchor, unknown), (0, 1))
-                self.assertEqual(len(data), 56 + key_size)
-                self.assertNotIn(startup.TOKEN.encode(), data)
-                output_metadata = output.stat()
-                self.assertEqual((device, inode), (output_metadata.st_dev, output_metadata.st_ino))
-                self.assertLessEqual(size, len(expected), 'checkpoint advanced beyond expected output')
-                if size == len(expected):
-                    self.assertEqual(output.read_bytes(), expected)
-                    return
-            self.assertIsNone(proc.poll(), 'owner stopped before checkpoint publication')
-            self.assertLess(time.monotonic(), deadline, 'successful output checkpoint was not published')
-            time.sleep(.01)
+        outbound.wait_checkpoint(self, proc, output, expected, budget)
 
     def run_loss_case(self, receipt_closed=False, kind="SEND", selected_part=False):
         instrumented = bool(startup.PREFIX)

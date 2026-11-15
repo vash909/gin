@@ -16,6 +16,157 @@ import sys
 import threading
 import time
 import unittest
+import tempfile
+from unittest import mock
+
+
+class CheckpointObserverGuards(unittest.TestCase):
+    """Native filesystem guards; injected scheduling/uid/clock is labelled."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(dir=REPO / '.build')
+        self.addCleanup(self.directory.cleanup)
+        self.output = Path(self.directory.name) / 'out'
+        self.output.write_bytes(b'expected')
+        self.checkpoint = self.output.with_name('.gin.checkpoint')
+        self.proc = mock.Mock()
+        self.proc.poll.return_value = None
+        self.publish()
+
+    def publish(self, data=None):
+        metadata = self.output.stat()
+        if data is None:
+            data = b'GINCP\x00\x00\x01' + struct.pack('>6Q', 0, 1,
+                metadata.st_dev, metadata.st_ino, 8, 1) + b'k'
+        temporary = self.checkpoint.with_name('replacement')
+        temporary.write_bytes(data)
+        temporary.chmod(0o600)
+        temporary.replace(self.checkpoint)
+
+    def observe(self, timeout=.15):
+        wait_checkpoint(self, self.proc, self.output, b'expected', timeout)
+
+    def test_real_rename_retries_retired_descriptor(self):
+        # Inject scheduling only: fstat and rename use actual filesystem state.
+        original = os.fstat
+        calls = []
+        def replacing(fd):
+            if not calls:
+                self.publish()
+            result = original(fd)
+            calls.append(result.st_nlink)
+            return result
+        with mock.patch.object(os, 'fstat', side_effect=replacing):
+            self.observe()
+        self.assertIn(0, calls, 'observer never pinned the retired generation')
+        self.assertIn(1, calls, 'replacement was not independently observed')
+
+    def test_unsafe_native_metadata_rejected_without_fifo_hang(self):
+        for kind in ('hardlink', 'symlink', 'fifo', 'mode'):
+            with self.subTest(kind=kind):
+                self.checkpoint.unlink()
+                self.publish()
+                extra = self.checkpoint.with_name('extra')
+                if kind == 'hardlink':
+                    os.link(self.checkpoint, extra)
+                elif kind == 'symlink':
+                    self.checkpoint.rename(extra)
+                    self.checkpoint.symlink_to(extra)
+                elif kind == 'fifo':
+                    self.checkpoint.unlink()
+                    os.mkfifo(self.checkpoint, 0o600)
+                else:
+                    self.checkpoint.chmod(0o644)
+                if kind == 'fifo':
+                    # A parent deadline catches a blocking-open regression; elapsed
+                    # time measured after observe() returns cannot detect a hang.
+                    script = (
+                        'import sys,unittest; from pathlib import Path; from unittest import mock; '
+                        'from test_session_outbound import wait_checkpoint; '
+                        'proc=mock.Mock(); proc.poll.return_value=None\n'
+                        'try: wait_checkpoint(unittest.TestCase(),proc,Path(sys.argv[1]),b"expected",.15)\n'
+                        'except (AssertionError,OSError): sys.exit(0)\n'
+                        'sys.exit(1)\n')
+                    checked = subprocess.run([sys.executable, '-c', script, str(self.output)],
+                                             cwd=REPO / 'tests', capture_output=True, timeout=3)
+                    self.assertEqual((checked.returncode, checked.stdout, checked.stderr), (0, b'', b''))
+                else:
+                    with self.assertRaises((AssertionError, OSError)):
+                        self.observe()
+                if extra.exists():
+                    extra.unlink()
+
+    def test_rename_after_read_metadata_retries(self):
+        original = os.fstat
+        links = []
+        def replacing(fd):
+            result = original(fd)
+            links.append(result.st_nlink)
+            if len(links) == 2:
+                self.publish()  # Retire after capturing the post-read metadata.
+            return result
+        with mock.patch.object(os, 'fstat', side_effect=replacing):
+            self.observe()
+        self.assertIn(0, links, 'late retirement was not independently verified')
+
+    def test_snapshot_descriptors_closed(self):
+        original = os.open
+        descriptors = []
+        def opening(*args, **kwargs):
+            fd = original(*args, **kwargs)
+            descriptors.append(fd)
+            return fd
+        with mock.patch.object(os, 'open', side_effect=opening):
+            self.observe()
+        self.assertGreaterEqual(len(descriptors), 2)
+        for fd in descriptors:
+            with self.assertRaises(OSError) as caught:
+                os.fstat(fd)
+            self.assertEqual(caught.exception.errno, errno.EBADF)
+
+    def test_owner_injection_rejected(self):
+        with mock.patch.object(os, 'geteuid', return_value=os.geteuid() + 1):
+            with self.assertRaises(AssertionError):
+                self.observe()
+
+    def test_bad_records_and_output_rejected(self):
+        good = self.checkpoint.read_bytes()
+        for data in (b'bad', b'x' * 8193, b'BADMAGIC' + good[8:],
+                     good[:8] + struct.pack('>6Q', 1, 1, 0, 0, 8, 1) + b'k',
+                     good[:-1] + startup.TOKEN.encode(),
+                     good[:48] + struct.pack('>Q', 2) + b'k',
+                     good[:24] + struct.pack('>Q', 0) + good[32:]):
+            with self.subTest(data_length=len(data)):
+                self.publish(data)
+                with self.assertRaises(AssertionError):
+                    self.observe()
+        self.publish(good)
+        self.output.write_bytes(b'not same')
+        with self.assertRaises(AssertionError):
+            self.observe()
+
+    def test_replacement_retries_keep_deadline_and_owner_checks(self):
+        original = os.fstat
+        for stopped in (False, True):
+            with self.subTest(owner_exit=stopped):
+                self.proc.poll.reset_mock()
+                self.publish()
+                calls = []
+                def replacing(fd):
+                    self.publish()
+                    calls.append(fd)
+                    return original(fd)
+                self.proc.poll.side_effect = (lambda: 1 if len(calls) >= 2 else None) if stopped else None
+                # Clock injection bounds retry count without relying on CPU speed.
+                ticks = iter(i * .01 for i in range(100))
+                with mock.patch.object(os, 'fstat', side_effect=replacing), \
+                     mock.patch.object(time, 'monotonic', side_effect=lambda: next(ticks)):
+                    with self.assertRaisesRegex(AssertionError, 'owner stopped' if stopped else 'not published'):
+                        self.observe(.08)
+                self.assertGreaterEqual(len(calls), 2)
+                # Bound lifetime checks, not an incidental number of fstat calls.
+                self.assertGreaterEqual(self.proc.poll.call_count, 2)
+                self.assertLessEqual(self.proc.poll.call_count, 8)
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'tests'))
@@ -34,20 +185,81 @@ BOOT = ['/api/config', '/me', '/boot', '/api/config', '/me',
 
 
 def wait_checkpoint(test, proc, output, expected, timeout):
-    # Appending the golden output does not imply metadata publication completed.
+    # Pin one generation: a pathname stat and a later open are not a snapshot.
     checkpoint = output.with_name('.gin.checkpoint')
     deadline = time.monotonic() + timeout
+    seen = False
+    replacement = None
+
+    def identity(metadata):
+        return metadata.st_dev, metadata.st_ino
+
+    def safe(metadata, links=1):
+        test.assertTrue(stat.S_ISREG(metadata.st_mode))
+        test.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
+        test.assertEqual(metadata.st_uid, os.geteuid())
+        test.assertEqual(metadata.st_nlink, links)
+
+    def generation(metadata):
+        return (identity(metadata), metadata.st_mode, metadata.st_uid,
+                metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+    def check_lifetime():
+        test.assertIsNone(proc.poll(), 'owner stopped before checkpoint publication')
+        test.assertLess(time.monotonic(), deadline, 'successful output checkpoint was not published')
+
+    def current_generation():
+        # A pathname lstat can itself return a just-retired inode with nlink=0.
+        # Pin the current entry too; churn may retire these probes, but none is
+        # accepted until a distinct independently safe linked generation exists.
+        retired_identity = None
+        while True:
+            check_lifetime()
+            probe = os.open(checkpoint, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                current = os.fstat(probe)
+                safe(current, links=0 if current.st_nlink == 0 else 1)
+                if retired_identity is not None:
+                    test.assertNotEqual(identity(current), retired_identity,
+                                        'current checkpoint reopened retired generation')
+                if current.st_nlink == 1:
+                    return current
+                retired_identity = identity(current)
+            finally:
+                os.close(probe)
+
     while True:
+        # Replacement retries share the original deadline and owner lifetime.
+        check_lifetime()
         try:
-            metadata = checkpoint.lstat()
+            fd = os.open(checkpoint, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
-            metadata = None
-        if metadata is not None:
-            test.assertTrue(stat.S_ISREG(metadata.st_mode))
-            test.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
-            test.assertEqual(metadata.st_uid, os.geteuid())
-            test.assertEqual(metadata.st_nlink, 1)
-            data = checkpoint.read_bytes()
+            test.assertFalse(seen, 'checkpoint disappeared after observation')
+            time.sleep(.01)
+            continue
+        seen = True
+        try:
+            before = os.fstat(fd)
+            # A retired inode may have zero links, but is never accepted.
+            safe(before, links=0 if before.st_nlink == 0 else 1)
+            if replacement is not None:
+                test.assertNotEqual(identity(before), replacement,
+                                    'replacement retry reopened retired generation')
+            chunks = bytearray()
+            while len(chunks) < 8193:
+                check_lifetime()
+                chunk = os.read(fd, 8193 - len(chunks))
+                if not chunk:
+                    break
+                chunks.extend(chunk)
+            data = bytes(chunks)
+            after = os.fstat(fd)
+            safe(after, links=0 if after.st_nlink == 0 else 1)
+            test.assertEqual((identity(before), before.st_mode, before.st_uid,
+                              before.st_size, before.st_mtime_ns),
+                             (identity(after), after.st_mode, after.st_uid,
+                              after.st_size, after.st_mtime_ns))
+            test.assertEqual(len(data), after.st_size)
             test.assertGreaterEqual(len(data), 56)
             test.assertLessEqual(len(data), 8192)
             test.assertEqual(data[:8], b'GINCP\x00\x00\x01')
@@ -58,11 +270,27 @@ def wait_checkpoint(test, proc, output, expected, timeout):
             output_metadata = output.stat()
             test.assertEqual((device, inode), (output_metadata.st_dev, output_metadata.st_ino))
             test.assertLessEqual(size, len(expected), 'checkpoint advanced beyond expected output')
+            current = current_generation()  # no symlink following, including FIFO
+            if identity(current) != identity(after):
+                # Rename may occur after the post-read fstat, before the probe.
+                retired = os.fstat(fd)
+                safe(retired, links=0)
+                test.assertEqual(generation(after)[:-1], generation(retired)[:-1],
+                                 'retired checkpoint changed beyond unlink metadata')
+                replacement = identity(after)
+                continue
+            test.assertEqual(before.st_nlink, 1)
+            test.assertEqual(after.st_nlink, 1)
+            test.assertEqual(generation(before), generation(after), 'checkpoint changed during read')
+            test.assertEqual(generation(after), generation(current), 'checkpoint path changed during read')
+            replacement = None
             if size == len(expected):
                 test.assertEqual(output.read_bytes(), expected)
+                test.assertIsNone(proc.poll(), 'owner stopped before checkpoint publication')
+                test.assertLess(time.monotonic(), deadline, 'successful output checkpoint was not published')
                 return
-        test.assertIsNone(proc.poll(), 'owner stopped before checkpoint publication')
-        test.assertLess(time.monotonic(), deadline, 'successful output checkpoint was not published')
+        finally:
+            os.close(fd)
         time.sleep(.01)
 
 
