@@ -49,11 +49,27 @@ class SmokeGuards(unittest.TestCase):
                 self.assertEqual(error.exception.code, 2)
 
     def setUp(self):
-        base = Path(os.environ.get('TMPDIR') or str(SCRIPT.parent.parent / '.build'))
-        base.mkdir(parents=True, exist_ok=True)
-        self.temp = tempfile.TemporaryDirectory(prefix='smoke-guard-', dir=base)
-        self.root = Path(self.temp.name)
-        self.addCleanup(self.temp.cleanup)
+        import pwd
+        # Guest scratch can live below shared /tmp, while a synced checkout can
+        # retain host ownership. Keep the smoke tool's ancestor checks intact:
+        # allocate test data only below a separately verified writable base.
+        candidates = [os.environ.get('TMPDIR'), SCRIPT.parent.parent / '.build',
+                      pwd.getpwuid(os.getuid()).pw_dir]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                base = Path(candidate).resolve(strict=True)
+                directory = smoke.private_directory(base, owner_only=False)
+                os.close(directory)
+                self.temp = tempfile.TemporaryDirectory(prefix='smoke-guard-', dir=base)
+            except (OSError, ValueError):
+                continue
+            self.root = Path(self.temp.name)
+            self.addCleanup(self.temp.cleanup)
+            break
+        else:
+            self.fail('No trusted writable scratch base for smoke fixtures')
 
     def test_private_directory_rejects_symlink_ancestor(self):
         actual = self.root / 'actual'
@@ -103,6 +119,34 @@ class SmokeGuards(unittest.TestCase):
             with self.assertRaises(OSError) as error:
                 fcntl.fcntl(fd, fcntl.F_GETFD)
             self.assertEqual(error.exception.errno, errno.EBADF)
+
+
+    def test_fixture_avoids_shared_temporary_ancestors(self):
+        shared = self.root / 'shared'
+        shared.mkdir(mode=0o1777)
+        shared.chmod(0o1777)
+        checkout = shared / 'checkout'
+        (checkout / '.build').mkdir(parents=True, mode=0o700)
+        home = self.root / 'private-home'
+        home.mkdir(mode=0o700)
+        from types import SimpleNamespace
+        fixture = SmokeGuards('test_explicit_arguments_only_do_not_connect')
+        accepted = False
+        try:
+            with mock.patch.dict(os.environ, {'TMPDIR': str(shared)}), \
+                    mock.patch(__name__ + '.SCRIPT', checkout / 'scripts/live_smoke.py'), \
+                    mock.patch('pwd.getpwuid', return_value=SimpleNamespace(pw_dir=str(home))):
+                fixture.setUp()
+            try:
+                directory = smoke.private_directory(fixture.root)
+            except (OSError, ValueError):
+                pass
+            else:
+                os.close(directory)
+                accepted = True
+        finally:
+            fixture.doCleanups()
+        self.assertTrue(accepted, 'Fixture selected a root beneath a shared ancestor')
 
 
 class SmokeIPC(SmokeGuards):
