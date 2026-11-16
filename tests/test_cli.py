@@ -115,7 +115,7 @@ class GinTests(unittest.TestCase):
     def test_no_arguments_prints_banner_only_on_stdout(self):
         result = subprocess.run([str(BIN)], cwd=self.base, capture_output=True)
         expected = (
-            "       :####:   ######   ###   ##\n"
+            "   :####:   ######   ###   ##\n"
             "   ######   ######   ###   ##\n"
             " :##:  .#     ##     ###:  ##\n"
             " ##:          ##     ####  ##\n"

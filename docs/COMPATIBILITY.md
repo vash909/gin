@@ -3,9 +3,10 @@
 The [verified-WSS native connection API](CONNECT.md) provides root-first
 subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
 composes verified startup and live selected-window plaintext reception in the
-CLI. The 18.4 development candidate composes FIFO send/control, native
-liveness and bounded history/restart recovery; qualification remains pending.
-No live Grappa interoperability is claimed.
+CLI, including FIFO send/control, native liveness and bounded history/restart
+recovery. An owner-authorized point-19 candidate has narrow live plaintext
+evidence against a deployment reporting Grappa 1.6.4/protocol 63; this is not
+a completed release qualification. See [opt-in smoke and evidence](LIVE_TESTS.md).
 
 ## Current status
 
@@ -19,18 +20,24 @@ reception, not a released full chat client.
   floor: `R=36` for the [receive subset](PROTOCOL.md), including `dm_with`.
   This is not a promise of every feature through 36; native APIs retain explicit
   caller policy.
-- Qualified runtime Grappa revisions: **none**.
+- Release-qualified runtime Grappa commits: **none**. Candidate live observations
+  cover a deployment reporting 1.6.4/protocol 63/minimum 1. The owner confirms
+  upstream release `v1.6.4`, resolved to commit
+  `874d804dde0a95e7f1be3ddc7c954989c35311da`; deployment linkage is owner-attested.
+  Required CI/native FreeBSD for this candidate is pending.
 - Isolated REST/TLS and account authentication APIs: local HTTP/HTTPS fixtures
   only, including bounded JSON, private credentials and [HTTP discovery with
   gated authentication](DISCOVERY.md) and [owned topology snapshots](TOPOLOGY.md);
   REST query inventory remains unknown without a user-topic snapshot, and no
-  live Grappa qualification is claimed; isolated WebSocket acquisition is in
+  general live-version guarantee is claimed; composed CLI evidence is recorded
+  separately in [LIVE_TESTS.md](LIVE_TESTS.md). Isolated WebSocket acquisition is in
   [CONNECT.md](CONNECT.md). See [authentication scope](AUTH.md).
 - The [connected startup owner](SESSION.md) composes verified HTTPS discovery,
   stored-origin and account-identity checks, `/boot`, and root-first WSS
   subscriptions and selected-window plaintext projection. The 18.4 development
   candidate also composes FIFO sending/control, liveness and bounded recovery;
-  candidate integration is not supported-platform, release or live qualification.
+  candidate integration alone is not supported-platform or release qualification.
+  The separately recorded live evidence is limited to its tested plaintext scope.
 - Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
   explicit-message fragment collection and reply/reference fixtures only;
   stricter local reference/object-payload policies are documented there.
