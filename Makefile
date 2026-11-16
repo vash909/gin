@@ -298,6 +298,7 @@ check: all .build/test_checkpoint_fault .build/test_checkpoint .build/gin_cleanu
 	GIN_SESSION_BINARY=.build/gin_owner_fault $(PYTHON) tests/test_session_owner_faults.py
 	$(PYTHON) tests/test_build_prefix.py
 	$(PYTHON) tests/test_cli.py
+	$(PYTHON) tests/test_live_smoke.py
 	$(PYTHON) tests/test_locking.py
 	$(PYTHON) tests/test_input.py
 	$(PYTHON) tests/test_runtime.py

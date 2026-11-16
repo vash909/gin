@@ -150,6 +150,12 @@ static enum gin_session_code project(const struct gin_live_view *v,
     if (message && (!c->source_target || !same(channel, c->source_target))) goto done;
     peer = c->query && message ? text(row, "dm_with") : channel;
     if (!peer || gin_name_prepare(network, peer, c->settings->local.chantypes, &name) < 0) goto done;
+    /* Auxiliary lifecycle events can introduce windows absent from boot.
+     * Ignore their validated route without changing the selected projection;
+     * message admission and selected-window authority remain strict. */
+    if (!message && !same(peer, c->settings->local.target)) {
+        code = GIN_SESSION_OK; goto done;
+    }
     window = gin_topology_find_window(topology, net->id, name.canonical_target);
     if (!window) goto done;
     if (!same(peer, c->settings->local.target)) { code = GIN_SESSION_OK; goto done; }
