@@ -1,4 +1,5 @@
 #include "history_values.h"
+#include "http_control.h"
 #include "gin_naming.h"
 #include <stdlib.h>
 #include <string.h>
@@ -47,10 +48,11 @@ static int known_route(const struct gin_topology *t, const struct gin_history_sc
         return gin_topology_queries_known(t) && w->role == GIN_REMOTE_QUERY;
     return w->role == GIN_REMOTE_CHANNEL;
 }
-struct gin_history_fetch_result gin_history_fetch(const struct gin_auth_settings *s,
+struct gin_history_fetch_result gin_history_fetch_controlled(const struct gin_auth_settings *s,
     const struct gin_protocol_policy *policy, const struct gin_credential *credential,
     const struct gin_topology *topology, const struct gin_history_scope *scope,
-    const struct gin_history_request *request, struct gin_history_page **out)
+    const struct gin_history_request *request, struct gin_history_page **out,
+    struct gin_http_control *control)
 {
     struct gin_history_fetch_result r = {GIN_HISTORY_INVALID, GIN_PROTOCOL_INVALID,
         GIN_AUTH_INVALID, 0, 0, 0};
@@ -91,10 +93,15 @@ struct gin_history_fetch_result gin_history_fetch(const struct gin_auth_settings
     effective = *policy;
     if (effective.required_server_protocol < (scope->role == GIN_RENDER_QUERY ? 36 : 4))
         effective.required_server_protocol = scope->role == GIN_RENDER_QUERY ? 36 : 4;
-    r.protocol = gin_protocol_fetch(s, &effective, &info);
+    if (control && control->aborted) { r.code = GIN_HISTORY_TRANSPORT; goto done; }
+    r.protocol = control ? gin_protocol_fetch_controlled(s, &effective, &info, control) :
+        gin_protocol_fetch(s, &effective, &info);
+    if (control && control->aborted) { r.code = GIN_HISTORY_TRANSPORT; goto done; }
     if (r.protocol != GIN_PROTOCOL_OK) { r.code = protocol_error(r.protocol); goto done; }
     r.auth_attempted = 1;
-    r.auth = gin_auth_identity(s, credential, &verified);
+    r.auth = control ? gin_auth_identity_controlled(s, credential, &verified, control) :
+        gin_auth_identity(s, credential, &verified);
+    if (control && control->aborted) { r.code = GIN_HISTORY_TRANSPORT; goto done; }
     if (r.auth != GIN_AUTH_OK) { r.code = auth_error(r.auth); goto done; }
     body = malloc(GIN_HISTORY_RESPONSE_MAX);
     if (!body) { r.code = GIN_HISTORY_NOMEM; goto done; }
@@ -105,7 +112,9 @@ struct gin_history_fetch_result gin_history_fetch(const struct gin_auth_settings
     q.bearer = verified.token; q.bearer_origin = verified.origin;
     q.json_body = NULL; q.json_length = 0;
     r.get_attempted = 1;
-    response = gin_http_request(&q, body, GIN_HISTORY_RESPONSE_MAX);
+    response = control ? gin_http_request_controlled(&q, body, GIN_HISTORY_RESPONSE_MAX, control) :
+        gin_http_request(&q, body, GIN_HISTORY_RESPONSE_MAX);
+    if (control && control->aborted) { r.code = GIN_HISTORY_TRANSPORT; goto done; }
     r.http_status = response.http_status;
     /* Status is diagnostic only until the transfer completed successfully. */
     switch (response.code) {
@@ -127,4 +136,12 @@ done:
     if (body) { wipe(body, GIN_HISTORY_RESPONSE_MAX); free(body); }
     wipe(url, sizeof(url));
     return r;
+}
+
+struct gin_history_fetch_result gin_history_fetch(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, const struct gin_credential *credential,
+    const struct gin_topology *topology, const struct gin_history_scope *scope,
+    const struct gin_history_request *request, struct gin_history_page **out)
+{
+    return gin_history_fetch_controlled(s,policy,credential,topology,scope,request,out,NULL);
 }

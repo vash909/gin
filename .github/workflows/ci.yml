@@ -106,7 +106,7 @@ jobs:
 
   analysis:
     runs-on: ubuntu-24.04
-    # The full instrumented suite exceeded 20 minutes while still progressing.
+    # Static checks and sanitizers have a budget independent of Valgrind.
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,6 +132,23 @@ jobs:
           cppcheck --force "-DLIBCURL_VERSION_NUM=0x$curl_vernum" "-DJANSSON_VERSION_HEX=$jansson_verhex" --std=c99 --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --suppress=missingIncludeSystem -I include src
       - name: ASan and UBSan
         run: make CC=gcc CURL_CONFIG="$CURL_CONFIG" CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie' LDFLAGS='-fsanitize=address,undefined -no-pie' check
+
+  valgrind:
+    runs-on: ubuntu-24.04
+    # The combined job exhausted 40 minutes while Valgrind still progressed.
+    # Keep the full ownership and instrumentation sequence in its own budget.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install analysis tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends cppcheck shellcheck valgrind libcurl4-openssl-dev libjansson-dev pkg-config openssl
+      - name: Build native WebSocket curl
+        env:
+          TMPDIR: ${{ runner.temp }}
+          GIN_CURL_PREFIX: ${{ runner.temp }}/gin-curl
+        run: |
+          sh scripts/build-host-curl.sh
+          echo "CURL_CONFIG=$GIN_CURL_PREFIX/bin/curl-config" >> "$GITHUB_ENV"
       - name: Valgrind
         run: |
           make clean
@@ -147,12 +164,31 @@ jobs:
           GIN_AUTH_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_auth.py AuthTests.test_stateful_revocation_and_explicit_persistence
           GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_connect.py
           GIN_LIVENESS_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_liveness.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_liveness.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_history_initial.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_history_new_window.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_history_epoch.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_history_retry.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_checkpoint_catchup.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_checkpoint.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_cleanup_control.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_reconnect.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_start_recovery.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_start_deadline.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_http_control.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_recovery_http_control.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_live_http.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_live_control_http.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_live_http_recovery.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_live_preflight_stop.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_backoff_control.py
           GIN_RENDER_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_render.py
           sudo env TMPDIR="$PWD/.build/root-tests" .build/test_render_output
           GIN_SEND_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_send.py
           GIN_CONTROL_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_control.py
           GIN_QUERY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_query.py
           GIN_HISTORY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_history_http.py
+          GIN_HISTORY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_history_http_control.py
           GIN_HISTORY_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_history.py
           GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session.py
           GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_failures.py
@@ -162,11 +198,15 @@ jobs:
           GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_operations.py
           GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_controls.py
           GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_query.py
+          GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_query_recovery.py
           GIN_SESSION_BINARY=.build/gin_receive_observer GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_admission.py
           GIN_SESSION_BINARY=.build/gin_owner_fault GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_session_owner_faults.py
           valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_live_json_fidelity render
           sudo env TMPDIR="$PWD/.build/root-tests" python3 tests/test_control.py ControlTests.test_local_rejections_before_discovery
-          for unit in test_session_operation test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+          for mode in pre post; do
+            valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all .build/test_checkpoint_fault "$mode"
+          done
+          for unit in test_checkpoint test_session_operation test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
             valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all ".build/$unit"
           done
           for unit in test_authority_json_config test_authority_json_identity test_authority_json_store; do
@@ -187,7 +227,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [portable, compatibility, freebsd, analysis]
+    needs: [portable, compatibility, freebsd, analysis, valgrind]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

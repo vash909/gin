@@ -1,4 +1,5 @@
 #include "gin_protocol.h"
+#include "http_control.h"
 #include <string.h>
 
 static void wipe(void *p, size_t n)
@@ -7,8 +8,9 @@ static void wipe(void *p, size_t n)
     while (n--) *v++ = 0;
 }
 
-enum gin_protocol_code gin_protocol_fetch(const struct gin_auth_settings *s,
-    const struct gin_protocol_policy *policy, struct gin_protocol_info *out)
+static enum gin_protocol_code protocol_fetch(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, struct gin_protocol_info *out,
+    struct gin_http_control *control)
 {
     char url[GIN_CREDENTIAL_ORIGIN_MAX + sizeof("/api/config")];
     unsigned char body[GIN_PROTOCOL_BODY_MAX];
@@ -31,7 +33,8 @@ enum gin_protocol_code gin_protocol_fetch(const struct gin_auth_settings *s,
     transport.header_limit = GIN_HTTP_HEADER_MAX;
     transport.allow_loopback_http = 0;
     /* The unauthenticated API has no bearer or request-body fields. */
-    result = gin_http_get(&transport, body, sizeof(body));
+    result = control ? gin_http_get_controlled(&transport,body,sizeof(body),control) :
+        gin_http_get(&transport,body,sizeof(body));
     switch (result.code) {
     case GIN_HTTP_OK:
         code = result.http_status == 200 ?
@@ -48,6 +51,18 @@ enum gin_protocol_code gin_protocol_fetch(const struct gin_auth_settings *s,
     wipe(url, sizeof(url));
     if (code != GIN_PROTOCOL_OK) memset(out, 0, sizeof(*out));
     return code;
+}
+
+enum gin_protocol_code gin_protocol_fetch(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, struct gin_protocol_info *out)
+{
+    return protocol_fetch(s,policy,out,NULL);
+}
+enum gin_protocol_code gin_protocol_fetch_controlled(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, struct gin_protocol_info *out,
+    struct gin_http_control *control)
+{
+    return protocol_fetch(s,policy,out,control);
 }
 
 static struct gin_protocol_auth_result preflight(const struct gin_auth_settings *s,

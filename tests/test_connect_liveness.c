@@ -594,8 +594,40 @@ static void retry_observes_clock(void)
     assert(s->result.code==GIN_CONNECT_CLOCK);
     fetch_rewind_ns=0; gin_connect_free(s); tick.tv_nsec=0;
 }
+/* Characterization of private HTTP wait ownership: partial input is not
+ * immediate work, while an exhausted productive quantum is. */
+static void http_wait_budget(void)
+{
+    struct gin_connect *s=session();
+    struct gin_liveness_settings p={100,50,10,40,2};
+    unsigned wait=50;
+    assert(gin_connect_http_wait_budget(s,&wait)==GIN_CONNECT_INVALID);
+    assert(gin_connect_set_liveness(s,&p)==GIN_CONNECT_OK);
+    ready(s);
+    s->text_partial=1;
+    assert(gin_connect_service(s,0u)==GIN_CONNECT_OK);
+    assert(!gin_connect_receive_drained(s));
+    assert(!s->service_budget_exhausted);
+    wait=50;
+    assert(gin_connect_http_wait_budget(s,&wait)==GIN_CONNECT_OK && wait==50);
+    s->service_budget_exhausted=1;
+    wait=50;
+    assert(gin_connect_http_wait_budget(s,&wait)==GIN_CONNECT_OK && wait==0);
+    assert(gin_connect_service(s,0u)==GIN_CONNECT_OK && !s->service_budget_exhausted);
+    tick.tv_nsec=99500000;
+    wait=50;
+    assert(gin_connect_http_wait_budget(s,&wait)==GIN_CONNECT_OK && wait==1);
+    bad_clock=1;
+    wait=50;
+    assert(gin_connect_http_wait_budget(s,&wait)==GIN_CONNECT_CLOCK);
+    assert(gin_connect_last_result(s).code==GIN_CONNECT_CLOCK);
+    bad_clock=0;
+    gin_connect_free(s);
+    tick.tv_nsec=0;
+}
 int main(void)
 {
+    http_wait_budget();
     severance(); retry_policy(); clock_failure(); heartbeat_wire(); failure_classifier(); upgrade_precedence();
     independent_frames(); buffered_application_owns_wire();
     buffered_same_length_payload(); buffered_heartbeat_preempts_unstarted_application();

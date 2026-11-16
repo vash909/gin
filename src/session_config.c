@@ -1,6 +1,7 @@
 #include "gin_session.h"
 #include "gin_fs.h"
 #include "gin_http.h"
+#include "gin_liveness.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -30,7 +31,12 @@ static const struct config_field fields[] = {
     {"connect_ms", offsetof(struct gin_session_settings, connect_ms), 0, GIN_SESSION_REQUEST_MAX},
     {"total_ms", offsetof(struct gin_session_settings, total_ms), 0, GIN_SESSION_REQUEST_MAX},
     {"join_ms", offsetof(struct gin_session_settings, join_ms), 0, GIN_SESSION_REQUEST_MAX},
-    {"startup_ms", offsetof(struct gin_session_settings, startup_ms), 0, GIN_SESSION_STARTUP_MAX}
+    {"startup_ms", offsetof(struct gin_session_settings, startup_ms), 0, GIN_SESSION_STARTUP_MAX},
+    {"heartbeat_interval_ms", offsetof(struct gin_session_settings, heartbeat_interval_ms), 0, GIN_LIVENESS_INTERVAL_MAX_MS},
+    {"heartbeat_timeout_ms", offsetof(struct gin_session_settings, heartbeat_timeout_ms), 0, GIN_LIVENESS_TIMEOUT_MAX_MS},
+    {"retry_base_ms", offsetof(struct gin_session_settings, retry_base_ms), 0, GIN_LIVENESS_BACKOFF_MAX_MS},
+    {"retry_cap_ms", offsetof(struct gin_session_settings, retry_cap_ms), 0, GIN_LIVENESS_BACKOFF_MAX_MS},
+    {"max_retries", offsetof(struct gin_session_settings, max_retries), 0, GIN_LIVENESS_RETRIES_MAX}
 };
 
 void
@@ -44,6 +50,11 @@ gin_session_settings_init(struct gin_session_settings *settings)
     settings->total_ms = GIN_SESSION_TOTAL_MS;
     settings->join_ms = GIN_SESSION_JOIN_MS;
     settings->startup_ms = GIN_SESSION_STARTUP_MS;
+    settings->heartbeat_interval_ms = GIN_SESSION_HEARTBEAT_INTERVAL_MS;
+    settings->heartbeat_timeout_ms = GIN_SESSION_HEARTBEAT_TIMEOUT_MS;
+    settings->retry_base_ms = GIN_SESSION_RETRY_BASE_MS;
+    settings->retry_cap_ms = GIN_SESSION_RETRY_CAP_MS;
+    settings->max_retries = GIN_SESSION_MAX_RETRIES;
 }
 
 static int
@@ -77,10 +88,14 @@ trim(char *text)
 }
 
 static int
-number(const char *text, long maximum, long *out)
+number(const char *text, long maximum, int allow_zero, long *out)
 {
     long value = 0;
     const unsigned char *p = (const unsigned char *)text;
+    if (allow_zero && p[0] == '0' && p[1] == '\0') {
+        *out = 0;
+        return 0;
+    }
     if (*p < '1' || *p > '9')
         return -1;
     while (*p != '\0') {
@@ -127,7 +142,9 @@ parse(char *data, struct gin_session_settings *settings)
             seen |= 1u << i;
             if (fields[i].maximum) {
                 long *destination = (long *)((unsigned char *)settings + fields[i].offset);
-                if (number(value, fields[i].maximum, destination) == -1)
+                if (number(value, fields[i].maximum,
+                    fields[i].offset == offsetof(struct gin_session_settings, max_retries),
+                    destination) == -1)
                     return 2;
             } else {
                 char *destination = (char *)settings + fields[i].offset;
@@ -202,6 +219,18 @@ gin_session_config_read(const char *path, struct gin_session_settings *settings)
     return result;
 }
 
+static int
+liveness_valid(const struct gin_session_settings *settings)
+{
+    return settings->heartbeat_interval_ms > 0 &&
+        settings->heartbeat_interval_ms <= GIN_LIVENESS_INTERVAL_MAX_MS &&
+        settings->heartbeat_timeout_ms > 0 &&
+        settings->heartbeat_timeout_ms <= GIN_LIVENESS_TIMEOUT_MAX_MS &&
+        settings->retry_base_ms > 0 && settings->retry_base_ms <= settings->retry_cap_ms &&
+        settings->retry_cap_ms <= GIN_LIVENESS_BACKOFF_MAX_MS &&
+        settings->max_retries >= 0 && settings->max_retries <= GIN_LIVENESS_RETRIES_MAX;
+}
+
 int
 gin_session_settings_valid(const struct gin_session_settings *settings)
 {
@@ -219,7 +248,8 @@ gin_session_settings_valid(const struct gin_session_settings *settings)
     if (settings->connect_ms <= 0 || settings->connect_ms > GIN_SESSION_REQUEST_MAX ||
         settings->total_ms < settings->connect_ms || settings->total_ms > GIN_SESSION_REQUEST_MAX ||
         settings->join_ms <= 0 || settings->join_ms > GIN_SESSION_REQUEST_MAX ||
-        settings->startup_ms <= 0 || settings->startup_ms > GIN_SESSION_STARTUP_MAX)
+        settings->startup_ms <= 0 || settings->startup_ms > GIN_SESSION_STARTUP_MAX ||
+        !liveness_valid(settings))
         return 0;
     return gin_validate(settings->local.root, settings->local.network,
         settings->local.target, settings->local.chantypes) == 0;

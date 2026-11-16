@@ -3,8 +3,9 @@
 The [verified-WSS native connection API](CONNECT.md) provides root-first
 subscriptions through libcurl >=8.23.0. The [production session owner](SESSION.md)
 composes verified startup and live selected-window plaintext reception in the
-CLI. Connected FIFO send/control and recovery remain deferred; no live Grappa
-interoperability is claimed.
+CLI. The 18.4 development candidate composes FIFO send/control, native
+liveness and bounded history/restart recovery; qualification remains pending.
+No live Grappa interoperability is claimed.
 
 ## Current status
 
@@ -27,8 +28,9 @@ reception, not a released full chat client.
   [CONNECT.md](CONNECT.md). See [authentication scope](AUTH.md).
 - The [connected startup owner](SESSION.md) composes verified HTTPS discovery,
   stored-origin and account-identity checks, `/boot`, and root-first WSS
-  subscriptions and live selected-window plaintext projection. Connected FIFO
-  sending/control and recovery remain unwired.
+  subscriptions and selected-window plaintext projection. The 18.4 development
+  candidate also composes FIFO sending/control, liveness and bounded recovery;
+  candidate integration is not supported-platform, release or live qualification.
 - Isolated [Phoenix v2 TEXT codec](PHOENIX.md): source-derived golden frames,
   explicit-message fragment collection and reply/reference fixtures only;
   stricter local reference/object-payload policies are documented there.

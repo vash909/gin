@@ -1,9 +1,10 @@
 # History and bounded gap recovery
 
-This is the isolated native API in `include/gin_history.h`, not a connected
-`gin run`, live Grappa qualification, E2EE support or a delivery receipt. The CLI
-remains local-only. Caller-owned credentials, topology, subscription identity,
-HTTP global lifecycle and one held output root remain separate responsibilities.
+The native API in `include/gin_history.h` is composed by `gin connect` in the
+18.4 development candidate; qualification remains pending. `gin run` remains
+local-only. Neither composition nor the pure planner establishes live Grappa
+qualification, E2EE support or a delivery receipt. Native API callers still own
+credentials, topology, subscription identity, HTTP lifecycle and one held root.
 
 ## Source contract and supported subset
 
@@ -92,8 +93,10 @@ than searching every DOM key for every input key.
 
 ## Bounded recovery and identity
 
-Create a recovery attempt from a caller-supplied trusted previous processing
-anchor, or zero with an explicit unknown-before result. Never derive that anchor
+The native planner takes a caller-supplied trusted previous processing anchor,
+or zero with an explicit unknown-before result. The connected owner supplies
+this automatically from its validated private checkpoint, including quiet startup
+before first READY; there is no manual-anchor CLI option. Never derive that anchor
 from `/me` read cursors, unread counts, boot head maxima or a subscription ACK.
 Read cursors describe user reading, not delivery. Boot heads are limited,
 time-ordered startup data, not complete focused DM history.
@@ -105,8 +108,9 @@ network callback. Recovery helpers perform no HTTP, filesystem or clock reads.
 The owner supplies monotonic milliseconds and checks the deadline **after** a
 synchronous fetch before accepting its page. Fetch timeouts bound each request,
 not the complete three-request sequence; the recovery admission deadline does
-not interrupt an in-flight request. The owner must schedule HTTP budgets and
-WebSocket service without claiming hidden background heartbeat servicing.
+not itself interrupt an in-flight request. The connected owner uses controlled
+HTTP to service WSS, stop and deadlines outside curl callbacks, with HTTP as the
+sole blocking waiter. Native API callers must supply their own scheduling policy.
 
 The REST pagination cursor advances only through accepted REST rows. A buffered
 high-ID live message must not skip intervening history. Merged staged rows use
@@ -160,12 +164,59 @@ explicit owner policy, not a silent file rewrite.
 
 `fetch_after` is a pagination position, **not a durable processed checkpoint or
 output ACK**. Only the owner can record processing progress after successful
-output. No persistent checkpoint/database is added here. A new object after
-restart needs a trusted caller anchor or explicit unknown baseline; in-memory
-deduplication is not a cross-process exactly-once guarantee. Append-before-
+output. The pure planner does not persist state. A new planner object needs a
+trusted caller anchor or explicit unknown baseline; `connect` supplies automatic
+private checkpoint state as described below. In-memory deduplication is not a cross-process exactly-once guarantee. Append-before-
 checkpoint crashes can duplicate output; checkpoint-before-append can lose it.
 Server database restore/ID reuse is not reliably detectable without a generation
 token that this protocol does not supply.
+
+## Automatic connected checkpoints
+
+`connect` retains a private `.gin.checkpoint` sibling of the selected `out`, under
+its one held root. This bounded local format is not a public protocol/interface
+or user-editable configuration. The root is safely owned `0700`; metadata must
+be effective-user-owned, exactly `0600`, regular, single-link and no-follow.
+Trusted ancestors and cooperating same-UID writers remain assumptions, not
+protection from a malicious same-UID process. No bearer or message body is stored.
+
+The stable binding includes exact origin, credential `subject_id` UUID (not the
+display subject), numeric network ID, exact slug, canonical target, chantypes and
+plaintext role policy, plus checked output device/inode/size. Socket epoch and
+own nick scope each transient attempt, not the durable anchor. Validated missing
+metadata means anchor 0 and `unknown_before=1`; malformed/unsafe metadata,
+scope mismatch or inode/size ambiguity instead stop without append, repair or
+truncation. Missing metadata is considered UNKNOWN only after its existing
+window/output have passed validation, not from ENOENT at an arbitrary ancestor.
+A legitimate absent selected layout is staged transiently
+and created only after current joined/drained route authority, not as unsafe-path
+repair. An actual complete append may publish anchor 0 while retaining UNKNOWN.
+
+Progress advances only through the complete actually appended REST-eligible
+prefix of a visibly drained staged batch, never the maximum live ID, REST fetch
+cursor alone or user read cursor. For example REST 18 plus live 19 can publish
+anchor 18; after restart, strict `after=18` REST 20 plus live 21 can publish 20.
+The already-output live tail can recur. On a fresh epoch, discard uncommitted
+stage/live IDs and rebuild with the actual epoch/own nick, preserving committed
+progress and the same held root/output. Catch-up blocks FIFO admission until
+publication; it is not a global ordering or duplicate-free guarantee.
+
+Replacement writes/fsyncs an owned temporary and renames it atomically. Failure
+before rename preserves prior metadata; directory-fsync failure after rename may
+mean publication plus error, never rollback or permission to replay. Only this
+invocation's identity-checked temporary is eligible for cleanup. Append and
+checkpoint publication are not transactional: partial append, crash or power loss
+can leave ambiguity. Matching inode/size is consistency, not content
+authentication, authenticated server generation, durable output or remote ACK.
+Private checkpoint descriptors close before the borrowed output and held root;
+no second root/lock descriptor is acquired (see [LOCKING.md](LOCKING.md)).
+
+The existing planner limits above remain local policies, not a total RAM/DOM cap.
+The connected owner additionally retains at most 64 ID-less deferred records and
+2 MiB rendered bytes, plus bounded record overhead, separately from planner
+storage and the metadata queue. Native history failure may use unused retry
+budget only on an eligible, old-metadata-drained transport path; HTTP/auth/decode/
+output/limit failures and stop/deadline expiry do not authorize blind retry.
 
 ## Encryption and honest guarantees
 

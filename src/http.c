@@ -1,4 +1,5 @@
 #include "gin_http.h"
+#include "http_control.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -206,8 +207,52 @@ static int valid_request(const struct gin_http_request *q)
     return 1;
 }
 
+static int control_tick(struct gin_http_control *control, unsigned *wait)
+{
+    if (control->aborted) return 1;
+    if (control->tick(control->opaque,wait)) { control->aborted=1; return 1; }
+    if (*wait>50u) *wait=50u;
+    return 0;
+}
+/* Explicit controlled calls yield to their owner outside libcurl callbacks.
+ * This loop is cooperative, not a hard real-time bound on library/OS work. */
+static CURLcode controlled_perform(CURL *easy, struct gin_http_control *control)
+{
+    CURLM *multi=NULL;
+    CURLcode result=CURLE_RECV_ERROR;
+    int added=0;
+    unsigned wait=50u;
+    if (control_tick(control,&wait)) return CURLE_ABORTED_BY_CALLBACK;
+    multi=curl_multi_init();
+    if (!multi) return CURLE_FAILED_INIT;
+    if (curl_multi_add_handle(multi,easy)!=CURLM_OK) goto done;
+    added=1;
+    for (;;) {
+        CURLMsg *message;
+        int running=0, remaining=0, complete=0;
+        wait=50u;
+        if (control_tick(control,&wait)) { result=CURLE_ABORTED_BY_CALLBACK; break; }
+        if (curl_multi_perform(multi,&running)!=CURLM_OK) break;
+        /* Abort is latched before successful output is published, even if
+         * completion and the owner boundary become observable together. */
+        if (control_tick(control,&wait)) { result=CURLE_ABORTED_BY_CALLBACK; break; }
+        while ((message=curl_multi_info_read(multi,&remaining))!=NULL) {
+            if (message->msg==CURLMSG_DONE && message->easy_handle==easy) {
+                result=message->data.result; complete=1; break;
+            }
+        }
+        if (complete || !running) break;
+        if (curl_multi_poll(multi,NULL,0,(int)wait,NULL)!=CURLM_OK) break;
+    }
+done:
+    if (added && curl_multi_remove_handle(multi,easy)!=CURLM_OK && result==CURLE_OK)
+        result=CURLE_RECV_ERROR;
+    if (curl_multi_cleanup(multi)!=CURLM_OK && result==CURLE_OK) result=CURLE_RECV_ERROR;
+    return result;
+}
 static struct gin_http_result perform(const struct gin_http_settings *s,
-    const struct gin_http_request *q, unsigned char *body, size_t capacity)
+    const struct gin_http_request *q, unsigned char *body, size_t capacity,
+    struct gin_http_control *control)
 {
     struct gin_http_result r = { GIN_HTTP_TRANSPORT, 0, 0, 0 };
     struct transfer t;
@@ -221,7 +266,7 @@ static struct gin_http_result perform(const struct gin_http_settings *s,
         s->total_ms > GIN_HTTP_TIMEOUT_MAX || !s->header_limit ||
         s->header_limit > GIN_HTTP_HEADER_MAX ||
         (s->allow_loopback_http != 0 && s->allow_loopback_http != 1) ||
-        !valid_url(s->url, s->allow_loopback_http)) {
+        (control && !control->tick) || !valid_url(s->url, s->allow_loopback_http)) {
         r.code = GIN_HTTP_INVALID;
         return r;
     }
@@ -283,7 +328,7 @@ static struct gin_http_result perform(const struct gin_http_settings *s,
         SET(CURLOPT_CAINFO, s->ca_file);
     SET(CURLOPT_HTTP_CONTENT_DECODING, 0L);
     SET(CURLOPT_NOSIGNAL, 1L);
-    code = curl_easy_perform(easy);
+    code = control ? controlled_perform(easy,control) : curl_easy_perform(easy);
     r.header_length = t.headers;
     (void)curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &r.http_status);
     if (t.limited) {
@@ -323,7 +368,7 @@ done:
 struct gin_http_result gin_http_get(const struct gin_http_settings *s,
     unsigned char *body, size_t capacity)
 {
-    return perform(s, NULL, body, capacity);
+    return perform(s, NULL, body, capacity, NULL);
 }
 
 struct gin_http_result gin_http_request(const struct gin_http_request *q,
@@ -331,5 +376,18 @@ struct gin_http_result gin_http_request(const struct gin_http_request *q,
 {
     struct gin_http_result invalid = { GIN_HTTP_INVALID, 0, 0, 0 };
     if (!valid_request(q)) return invalid;
-    return perform(q->settings, q, body, capacity);
+    return perform(q->settings, q, body, capacity, NULL);
+}
+
+struct gin_http_result gin_http_get_controlled(const struct gin_http_settings *s,
+    unsigned char *body, size_t capacity, struct gin_http_control *control)
+{
+    return perform(s,NULL,body,capacity,control);
+}
+struct gin_http_result gin_http_request_controlled(const struct gin_http_request *q,
+    unsigned char *body, size_t capacity, struct gin_http_control *control)
+{
+    struct gin_http_result invalid={GIN_HTTP_INVALID,0,0,0};
+    if (!valid_request(q)) return invalid;
+    return perform(q->settings,q,body,capacity,control);
 }

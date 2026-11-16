@@ -25,6 +25,18 @@ class BacklogServer(base.Server):
 
 
 class BacklogHandler(base.Handler):
+    def do_GET(self) -> None:
+        if self.path != '/networks/NetA/channels/Peer/messages?limit=200&after=0':
+            return super().do_GET()
+        srv = cast(BacklogServer, self.server)
+        assert self.headers.get('Authorization') == 'Bearer ' + base.TOKEN
+        assert srv.paths[-2:] == ['/api/config', '/me'], 'history lacks fresh preflight'
+        srv.paths.append(self.path)
+        self.send_response(200)
+        self.send_header('Content-Length', '2')
+        self.end_headers()
+        self.wfile.write(b'[]')
+
     def upgrade(self) -> None:
         srv = cast(BacklogServer, self.server)
         if self.headers.get('Authorization') is not None:
@@ -194,8 +206,12 @@ class BacklogTests(unittest.TestCase):
                     self.assertIn(expected, err, 'missing startup failure')
                 for secret in [base.TOKEN.encode(), b'YWF+']:
                     self.assertNotIn(secret, out + err, 'credential disclosed')
-                self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                    '/socket/websocket?vsn=2.0.0&client_proto=36'], 'incomplete startup HTTP flow')
+                expected_paths = ['/api/config', '/me', '/boot', '/api/config', '/me',
+                    '/socket/websocket?vsn=2.0.0&client_proto=36']
+                if mode == 'valid':
+                    expected_paths += ['/api/config', '/me',
+                        '/networks/NetA/channels/Peer/messages?limit=200&after=0']
+                self.assertEqual(srv.paths, expected_paths, 'incomplete startup HTTP flow')
                 self.assertEqual(srv.joins, ['grappa:user:Alice', 'grappa:user:Alice/network:NetA',
                     'grappa:user:Alice/network:NetA/channel:peer',
                     'grappa:user:Alice/network:NetA/channel:owna'], 'missing required subscriptions')

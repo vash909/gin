@@ -4,31 +4,12 @@ import unittest
 import test_session_outbound as outbound
 
 class OperationTracer(outbound.OutboundTracer):
-    def command(self, *args):
-        command = super().command(*args)
-        if args and args[0] == 'connect':
-            command += ['-O', str(self.operation_write)]
-        return command
-
     def test_literal_fifo_send_preserves_live_receive_without_local_echo(self):
-        read, self.operation_write = os.pipe()
-        os.set_blocking(read, False)
-        os.set_blocking(self.operation_write, False)
-        # Outbound fixture explicitly passes only READY: extend pass_fds locally
-        # through the subclass's command-independent process constructor below.
-        original = outbound.subprocess.Popen
-        def spawn(*args, **kwargs):
-            kwargs['pass_fds'] = (*kwargs.get('pass_fds', ()), self.operation_write)
-            return original(*args, **kwargs)
-        outbound.subprocess.Popen = spawn
-        try:
-            super().test_literal_fifo_send_preserves_live_receive_without_local_echo()
-            self.assertEqual(os.read(read, 4096),
-                b'OP1 1 SEND PENDING 0\nOP1 1 SEND ACCEPTED_PERSISTED 0\n')
-        finally:
-            outbound.subprocess.Popen = original
-            os.close(read)
-            os.close(self.operation_write)
+        # The shared fixture consumes the real terminal record before SIGTERM;
+        # incoming application receipt alone no longer proves SEND completion.
+        super().test_literal_fifo_send_preserves_live_receive_without_local_echo()
+        self.assertEqual(self.operation_data,
+            b'OP1 1 SEND PENDING 0\nOP1 1 SEND ACCEPTED_PERSISTED 0\n')
 
 
 import contextlib
@@ -45,6 +26,7 @@ from pathlib import Path
 from typing import cast
 
 class OperationServer(startup.Server):
+    command_armed: threading.Event
     mode: str
     paths: list[str]
     posts: list[bytes]
@@ -52,7 +34,7 @@ class OperationServer(startup.Server):
 class ResultHandler(startup.Handler):
     def do_GET(self):
         srv = cast(OperationServer, self.server)
-        if srv.mode == 'preflight' and self.path == '/api/config' and srv.paths.count('/api/config') == 2:
+        if srv.mode == 'preflight' and self.path == '/api/config' and srv.command_armed.is_set():
             srv.paths.append(self.path)
             body = b'{"server":"grappa","protocol_version":99,"min_protocol_version":99}'
             self.send_response(200)
@@ -100,7 +82,7 @@ class OperationFailures(unittest.TestCase):
         srv = OperationServer(('127.0.0.1', 0), ResultHandler)
         srv.mode = mode
         srv.paths, srv.joins, srv.errors, srv.posts = [], [], [], []
-        for name in ['final_requested', 'release_final', 'stopped', 'client_closed', 'client_close_expected']:
+        for name in ['final_requested', 'release_final', 'stopped', 'client_closed', 'client_close_expected', 'command_armed']:
             setattr(srv, name, threading.Event())
         srv.release_final.set()
         srv.client_close_expected.set()
@@ -154,7 +136,9 @@ class OperationFailures(unittest.TestCase):
             try:
                 self.assertTrue(select.select([rr],[],[],outbound.budget(8))[0])
                 self.assertEqual(os.read(rr,128),b'READY\n')
-                startup_paths = list(srv.paths)
+                self.assertEqual(srv.paths, outbound.BOOT)
+                startup_paths = outbound.BOOT.copy()
+                srv.command_armed.set()
                 writer=os.open(next(root.rglob('in')),os.O_WRONLY|os.O_NONBLOCK)
                 if eof:
                     os.close(ew)

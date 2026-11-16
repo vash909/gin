@@ -153,7 +153,7 @@ class SessionControlsTracer(unittest.TestCase):
         selected_part = operation == "part-selected"
         other_part = operation == "part-other"
         with self.fixture() as (srv, origin):
-            root = self.certdir / "controls-root"
+            root = self.certdir / ("controls-root-" + operation)
             initialized = subprocess.run(self.command("init", "-d", root, "-n", "NetA", "-c", "#Room"), capture_output=True, timeout=budget(10))
             self.assertEqual(initialized.returncode, 0)
             outputs = list(root.rglob("out"))
@@ -175,15 +175,17 @@ class SessionControlsTracer(unittest.TestCase):
             settings = self.certdir / "controls-settings"
             settings.write_text("connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=180000\n" if startup.PREFIX else "")
             settings.chmod(0o600)
+            tree_before = {str(p.relative_to(root)) for p in root.rglob("*")} | {str(output.with_name(".gin.checkpoint").relative_to(root))}
             proc = subprocess.Popen(self.command("connect", "-f", settings, "-d", root, "-n", "NetA", "-c", "#Room", "-e", origin, "-m", "plain", "-a", self.certdir / "ca.pem", "-R", ready_write, "-O", op_write), pass_fds=(ready_write, op_write), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.operation_buffer = bytearray()
-            tree_before = {str(p.relative_to(root)) for p in root.rglob("*")}
             writer = -1
             try:
                 self.assertTrue(select.select([ready_read], [], [], budget(8))[0], "no correlated READY")
                 self.assertEqual(os.read(ready_read, 128), b"READY\n", "invalid readiness record")
                 self.assertFalse(select.select([ready_read], [], [], 0)[0], "extra READY data")
                 self.wait_output(proc, output, BEFORE)
+                outbound.wait_checkpoint(self, proc, output, PREFIX + BEFORE, budget(8))
+                self.assertEqual(srv.paths, outbound.BOOT)
                 try:
                     writer = os.open(output.with_name("in"), os.O_WRONLY | os.O_NONBLOCK)
                 except OSError as error:
@@ -213,7 +215,7 @@ class SessionControlsTracer(unittest.TestCase):
                     self.assertEqual({str(p.relative_to(root)) for p in root.rglob("*")}, tree_before)
                     self.assertEqual(srv.methods, ["DELETE"])
                     self.assertEqual(srv.posts, [b""])
-                    self.assertEqual(srv.paths[-3:], ["/api/config", "/me", "/networks/NetA/channels/%23rOOM"])
+                    self.assertEqual(srv.paths, outbound.BOOT + ["/api/config", "/me", "/networks/NetA/channels/%23rOOM"])
                     self.assertEqual(credential.read_bytes(), original_credential)
                     for fd, original_flags in flags.items():
                         self.assertEqual((fcntl.fcntl(fd, fcntl.F_GETFL), fcntl.fcntl(fd, fcntl.F_GETFD)), original_flags)
@@ -229,6 +231,7 @@ class SessionControlsTracer(unittest.TestCase):
                 self.assertFalse(select.select([op_read], [], [], 0.2)[0], "unexpected extra operation data")
                 srv.release_after.set()
                 self.wait_output(proc, output, AFTER)
+                outbound.wait_checkpoint(self, proc, output, PREFIX + BEFORE + AFTER, budget(8))
                 data = output.read_bytes()
                 self.assertEqual(data, PREFIX + BEFORE + AFTER, "output must be prefix+before+after exactly")
                 self.assertEqual(output.stat().st_ino, inode)
@@ -244,6 +247,8 @@ class SessionControlsTracer(unittest.TestCase):
                 else:
                     self.assertEqual(json.loads(srv.posts[0]), {"name": "#Other"})
                 self.assertEqual(json.loads(srv.posts[1]), {"body": TEXT})
+                self.assertEqual(srv.paths, outbound.BOOT + ["/api/config", "/me", control_path,
+                    "/api/config", "/me", "/networks/NetA/channels/%23Room/messages"])
                 # Each mutation requires its own fresh config and bound identity.
                 for post_path in [control_path, "/networks/NetA/channels/%23Room/messages"]:
                     idx = srv.paths.index(post_path)

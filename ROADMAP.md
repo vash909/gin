@@ -104,8 +104,13 @@ scaffold is a starting point, not completion of the operational milestones.
       operations and the CLI exposes rejection, uncertainty and unsupported
       encryption without leaking payloads into diagnostics or replaying input.
 
-    - **18.4 — Integrated liveness, recovery and restart.** Drive existing
-      heartbeat/backoff/session-expiry and history planners from the runtime.
+    - **18.4 — Integrated liveness, recovery and restart (IN PROGRESS).**
+      The development candidate composes native heartbeat/finite reconnect,
+      quiet-start history and automatic private selected-output checkpoints.
+      This is not merged/shipped completion: final-source review, installed
+      workflow and full platform/required-CI qualification remain pending.
+      No acceptance criterion below is marked complete by candidate integration.
+      Drive existing heartbeat/backoff/session-expiry and history planners from the runtime.
       Schedule bounded REST work outside callbacks with an explicit WSS-service
       and deadline policy; do not silently starve heartbeats or pending replies.
       Resubscribe and reconcile current topology/source epochs after reconnect,

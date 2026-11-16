@@ -93,10 +93,19 @@ class NegativeHandler(http.server.BaseHTTPRequestHandler):
             if opt.get('hold_http'):
                 srv.barrier.set()
                 assert srv.release.wait(WAIT), 'held HTTP barrier expired'
+                if srv.stopped.is_set():
+                    self.close_connection = True
+                    return
             channels = [] if opt.get('missing_route') else [
                 {'name': '#Room', 'joined': not opt.get('unjoined'), 'source': 'joined'}]
             body = {'networks': [{'id': 3000000001, 'slug': 'NetA', 'nick': 'OwnA'}],
                     'channels': {'NetA': channels}, 'heads': {}}
+        elif self.path == ('/networks/NetA/channels/' +
+                           ('Peer' if opt.get('query') else '%23Room') +
+                           '/messages?limit=200&after=0'):
+            assert self.headers.get('Authorization') == 'Bearer ' + TOKEN
+            assert srv.paths[-3:-1] == ['/api/config', '/me'], 'history lacks fresh preflight'
+            body = []
         elif self.path == '/socket/websocket?vsn=2.0.0&client_proto=36':
             self.upgrade()
             return
@@ -435,6 +444,9 @@ class SessionFailures(unittest.TestCase):
                 self.assertEqual(srv.paths, ['/api/config'])
 
     def test_root_protocol_and_join_rejection_never_ready_or_retry(self) -> None:
+        # This is a one-shot negative, including an uncorrelated ACK that
+        # eventually times out; finite retry behavior has separate fixtures.
+        self.settings.write_text(self.settings.read_text() + 'max_retries=0\n')
         for options in [{'root_protocol': 3}, {'reject_join': 1}, {'wrong_ack': True}]:
             with self.subTest(options=options), self.fixture(**options) as (srv, origin):
                 self.store(origin)
@@ -597,7 +609,8 @@ class SessionFailures(unittest.TestCase):
             with self.child(self.args(origin), srv) as (proc, fd):
                 self.barrier(srv, proc)
                 proc.send_signal(signal.SIGTERM)
-                srv.release.set()
+                # Require cancellation while the response remains held. The
+                # child finalizer reaps first, then stops/releases this handler.
                 self.finish(proc, 0)
                 self.no_ready(fd)
             self.assertTrue(store.read_bytes() == before, 'store changed')
@@ -619,7 +632,9 @@ class SessionFailures(unittest.TestCase):
             self.assertEqual(log.stat().st_ino, inode)
             self.assertEqual(log.read_bytes(), b'preserved prefix\n')
             self.assertEqual(srv.paths, ['/api/config', '/me', '/boot', '/api/config', '/me',
-                                         '/socket/websocket?vsn=2.0.0&client_proto=36'])
+                                         '/socket/websocket?vsn=2.0.0&client_proto=36',
+                                         '/api/config', '/me',
+                                         '/networks/NetA/channels/%23Room/messages?limit=200&after=0'])
 
 
 if __name__ == '__main__':

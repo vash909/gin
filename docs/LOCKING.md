@@ -9,8 +9,10 @@ directories, FIFO and log. It closes all child descriptors before releasing the
 lock and root descriptor. Successful initialization does not leave a writer
 running. `gin run` retains the same lock for the entire foreground local-only
 FIFO/event-loop lifecycle; see [RUNTIME.md](RUNTIME.md). There is no daemon,
-networking or message delivery. The bounded C input API is described in
-[INPUT.md](INPUT.md).
+networking or message delivery in `run`. The separate `connect` development
+candidate retains the same root across native liveness, recovery and automatic
+selected-window checkpoint work; see [SESSION.md](SESSION.md). The bounded C
+input API is described in [INPUT.md](INPUT.md).
 
 `gin check` remains lexical and read-only: it does not open/probe the output
 root, create or acquire a lock, or inspect whether another writer exists.
@@ -50,7 +52,9 @@ A later initializer reuses the same validated inode without stale timeouts,
 PID probing, killing another process, or deleting user data. Safe partial layouts
 are completed by the existing repeatable initializer. Existing valid FIFO/log
 inodes and log bytes survive. Unsafe objects still fail; no broad cleanup,
-transactional rollback, power-loss durability or fsync protocol is provided.
+transactional rollback or power-loss durability is provided by initialization.
+Private checkpoint replacement has its own fsync/error policy, not transactional
+log recovery; see [HISTORY.md](HISTORY.md#automatic-connected-checkpoints).
 
 ## Reusable held-root API
 
@@ -70,7 +74,7 @@ NUL-terminated; return values are zero or -1 with errno. Use:
    be repeated for multiple targets. There is no retained FIFO reader or log
    writer. `gin_root_input_open()` separately opens an existing input and
    transfers fd ownership to its caller; close it before root release. See
-   [INPUT.md](INPUT.md). A future runtime still owns scheduling and shutdown.
+   [INPUT.md](INPUT.md). The runtime owns scheduling and shutdown.
 3. `gin_root_release(&root)` only after all caller-owned child descriptors are
    closed. It closes lock and root, consumes/resets the handle, reports close
    errors, and permits another release of an empty handle. Interrupted closes
@@ -81,6 +85,24 @@ wraps this lifecycle for today's single initializer. The API uses bounded
 existing root/naming policies, no new runtime dependency, and no thread safety
 promise (creation temporarily changes the process umask). Handles must not be
 copied, manually edited, or used after release.
+
+### Connected checkpoint ownership
+
+The connected owner borrows the checked selected output and this same held root
+for private checkpoint storage. It never reacquires the root, opens a second
+lock fd or closes an independent lock alias. The checkpoint owns its private
+window/temporary descriptors, not the borrowed output, root or lock. Close the
+checkpoint first, then output and other children, then release the root. Keep
+these borrowed lifetimes intact across reconnect; discard only uncommitted
+history staging on a new actual epoch. Error cleanup follows the same order.
+Metadata is private `0600` regular single-link/no-follow state under the safely
+owned `0700` root, not a PID file or safe permission to rewrite an ambiguous log.
+Missing metadata alone is UNKNOWN; unsafe/malformed/scope/inode-size failures
+stop without repair. Replacement before rename preserves old metadata; after
+rename a directory-fsync error can follow publication, never imply rollback.
+Append and checkpoint publication are not one transaction, and inode/size checks
+do not authenticate contents or remote continuity. Trusted ancestors/cooperating
+same-UID users remain required; hostile same-UID replacement is not defended.
 
 ### POSIX per-process caveat
 
@@ -95,9 +117,9 @@ root, or read it as a config file during ownership. The live-handle guard is not
 a process-wide registry and cannot make arbitrary duplicate descriptors safe.
 
 Locks are not inherited across `fork`; do not use an inherited handle to mutate
-the tree. Both descriptors are close-on-exec. A future runtime must acquire and
-retain ownership in the actual writer process and audit every open/close path
-before integrating adapters, reloads or subprocesses. See the
+the tree. Both descriptors are close-on-exec. The runtime must retain ownership
+in the actual writer process and audit every adapter/reload/subprocess open and
+close path. See the
 [POSIX fcntl specification](https://pubs.opengroup.org/onlinepubs/9699919799/functions/fcntl.html)
 for process-associated advisory record-lock semantics.
 

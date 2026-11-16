@@ -229,7 +229,7 @@ class SessionQueryTracer(unittest.TestCase):
             credential.write_text(json.dumps({"version": 1, "origin": origin, "token": startup.TOKEN, "subject_id": startup.UUID, "subject_name": "Alice"}))
             credential.chmod(0o600)
             original_credential = credential.read_bytes()
-            tree_before = {str(p.relative_to(root)) for p in root.rglob("*")}
+            tree_before = {str(p.relative_to(root)) for p in root.rglob("*")} | {str(output.with_name(".gin.checkpoint").relative_to(root))}
             ready_read, ready_write = os.pipe()
             op_read, op_write = os.pipe()
             for fd in [ready_read, ready_write, op_read, op_write]:
@@ -238,7 +238,9 @@ class SessionQueryTracer(unittest.TestCase):
             self.assertGreaterEqual(ready_write, 3)
             self.assertGreaterEqual(op_write, 3)
             settings = self.certdir / f"query-settings-{mode}"
-            settings.write_text("connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=180000\n" if startup.PREFIX else "")
+            # These cases qualify terminal QUERY outcomes with retry disabled;
+            # recovery with an available budget has its own real-owner tracer.
+            settings.write_text("max_retries=0\n" + ("connect_ms=10000\ntotal_ms=20000\njoin_ms=12000\nstartup_ms=180000\n" if startup.PREFIX else ""))
             settings.chmod(0o600)
             proc = subprocess.Popen(self.command("connect", "-f", settings, "-d", root, "-n", "NetA", "-c", "#Room", "-e", origin, "-m", "plain", "-a", self.certdir / "ca.pem", "-R", ready_write, "-O", op_write), pass_fds=(ready_write, op_write), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.operation_buffer = bytearray()
@@ -248,6 +250,8 @@ class SessionQueryTracer(unittest.TestCase):
                 self.assertEqual(os.read(ready_read, 128), b"READY\n", "invalid readiness record")
                 self.assertFalse(select.select([ready_read], [], [], 0)[0], "extra READY data")
                 self.wait_output(proc, output, BEFORE)
+                outbound.wait_checkpoint(self, proc, output, PREFIX + BEFORE, budget(8))
+                self.assertEqual(srv.paths, outbound.BOOT)
                 try:
                     writer = os.open(output.with_name("in"), os.O_WRONLY | os.O_NONBLOCK)
                 except OSError as error:
@@ -264,7 +268,7 @@ class SessionQueryTracer(unittest.TestCase):
                 self.assertTrue(cast(QueryServer, srv).query_seen.wait(budget(8)), "server did not see query")
                 self.assertEqual(len(cast(QueryServer, srv).queries), 1)
                 self.assertEqual(cast(QueryServer, srv).queries[0], ["1", "4", "grappa:user:Alice", "open_query_window", {"network_id": 3000000001, "target_nick": "Bob"}])
-                self.assertEqual(srv.paths, ["/api/config", "/me", "/boot", "/api/config", "/me", "/socket/websocket?vsn=2.0.0&client_proto=36"])
+                self.assertEqual(srv.paths, outbound.BOOT)
                 self.assertEqual(srv.methods, [])
                 if mode != "ok":
                     tline = (TEXT + "\n").encode()
@@ -301,6 +305,7 @@ class SessionQueryTracer(unittest.TestCase):
                     self.assertTrue(cast(QueryServer, srv).posted.wait(budget(8)), "SEND POST not observed")
                     cast(QueryServer, srv).release_after.set()
                     self.wait_output(proc, output, AFTER)
+                    outbound.wait_checkpoint(self, proc, output, PREFIX + BEFORE + AFTER, budget(8))
                     data = output.read_bytes()
                     self.assertEqual(data, PREFIX + BEFORE + AFTER)
                     self.assertEqual(output.stat().st_ino, inode)
@@ -317,7 +322,7 @@ class SessionQueryTracer(unittest.TestCase):
                     self.assertGreaterEqual(idx, 2)
                     self.assertEqual(srv.paths[idx - 2], "/api/config")
                     self.assertEqual(srv.paths[idx - 1], "/me")
-                    self.assertEqual(srv.paths, ["/api/config", "/me", "/boot", "/api/config", "/me", "/socket/websocket?vsn=2.0.0&client_proto=36", "/api/config", "/me", "/networks/NetA/channels/%23Room/messages"])
+                    self.assertEqual(srv.paths, outbound.BOOT + ["/api/config", "/me", "/networks/NetA/channels/%23Room/messages"])
                     for fd, orig in flags.items():
                         self.assertEqual((fcntl.fcntl(fd, fcntl.F_GETFL), fcntl.fcntl(fd, fcntl.F_GETFD)), orig)
                     proc.send_signal(signal.SIGTERM)
@@ -358,7 +363,7 @@ class SessionQueryTracer(unittest.TestCase):
                     self.assertFalse(select.select([op_read], [], [], 0.2)[0], "unexpected extra OP after abort")
                     self.assertEqual(srv.methods, [])
                     self.assertEqual(cast(Any, srv).posts, [])
-                    self.assertEqual(srv.paths, ["/api/config", "/me", "/boot", "/api/config", "/me", "/socket/websocket?vsn=2.0.0&client_proto=36"])
+                    self.assertEqual(srv.paths, outbound.BOOT)
                     self.assertEqual(output.read_bytes(), PREFIX + BEFORE)
                     self.assertEqual(output.stat().st_ino, inode)
                     self.assertEqual({str(p.relative_to(root)) for p in root.rglob("*")}, tree_before)

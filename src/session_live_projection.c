@@ -1,5 +1,6 @@
 #include "session_live_projection.h"
 #include "history_evidence.h"
+#include "history_values.h"
 #include <jansson.h>
 #include <string.h>
 
@@ -45,9 +46,18 @@ static enum gin_session_code render_code(enum gin_render_code c)
     if (c == GIN_RENDER_IO) return GIN_SESSION_IO;
     return GIN_SESSION_ROUTE;
 }
-enum gin_session_code gin_live_project(const struct gin_live_view *v,
+static enum gin_session_code history_code(enum gin_history_code c)
+{
+    if (c == GIN_HISTORY_OK) return GIN_SESSION_OK;
+    if (c == GIN_HISTORY_NOMEM) return GIN_SESSION_NOMEM;
+    if (c == GIN_HISTORY_LIMIT) return GIN_SESSION_LIMIT;
+    if (c == GIN_HISTORY_UNSUPPORTED) return GIN_SESSION_UNSUPPORTED;
+    return GIN_SESSION_ROUTE;
+}
+static enum gin_session_code project(const struct gin_live_view *v,
     const struct gin_live_projection *c, const struct gin_topology *topology,
-    struct gin_topology **next, struct gin_render_record **record, int *terminal)
+    struct gin_topology **next, struct gin_render_record **record, int *terminal,
+    const struct gin_history_scope *scope, struct gin_history_page **history)
 {
     json_error_t error;
     json_t *o = NULL, *row;
@@ -64,6 +74,25 @@ enum gin_session_code gin_live_project(const struct gin_live_view *v,
     if (!v || !c || !topology || !next || *next || !record || *record || !terminal ||
         !c->settings || !c->subject || !c->own_nick || !v->fields.payload.data ||
         !v->fields.payload.length) return GIN_SESSION_INVALID;
+    if (scope || history) {
+        enum gin_history_code hc;
+        if (!scope || !history || *history) return GIN_SESSION_INVALID;
+        hc = gin_history_scope_check(scope);
+        if (hc != GIN_HISTORY_OK)
+            return hc == GIN_HISTORY_INVALID ? GIN_SESSION_INVALID : history_code(hc);
+        /* The topic subject is a display label, NOT the credential UUID.
+         * The owner binds subject_id through the checkpoint and bound /me;
+         * this borrowed projection validates its separate transport identity. */
+        if (strcmp(scope->origin, c->settings->origin) ||
+            strcmp(scope->own_nick, c->own_nick) ||
+            strcmp(scope->network_slug, c->settings->local.network) ||
+            strcmp(scope->target, c->settings->local.target) ||
+            strcmp(scope->chantypes, c->settings->local.chantypes) ||
+            scope->network_id != c->network_id ||
+            scope->socket_epoch != v->observed_epoch ||
+            scope->role != (c->query ? GIN_RENDER_QUERY : GIN_RENDER_CHANNEL))
+            return GIN_SESSION_ROUTE;
+    }
     memset(&error, 0, sizeof(error));
     *terminal = 0;
     o = json_loadb((const char *)v->fields.payload.data, v->fields.payload.length,
@@ -97,7 +126,9 @@ enum gin_session_code gin_live_project(const struct gin_live_view *v,
             !nick || !*nick || strlen(nick) > 256) goto done;
         net = gin_topology_find_id(topology, (int64_t)json_integer_value(id));
         if (!net) goto done;
-        code = c->query && net->id == c->network_id && !same(nick, c->own_nick) ?
+        code = net->id == c->network_id &&
+            (scope ? strcmp(nick, scope->own_nick) != 0 :
+                c->query && !same(nick, c->own_nick)) ?
             GIN_SESSION_ROUTE : GIN_SESSION_OK;
         goto done;
     }
@@ -134,9 +165,36 @@ enum gin_session_code gin_live_project(const struct gin_live_view *v,
     if (pc == GIN_PHOENIX_OK) pc = gin_phoenix_decode(encoded.data, encoded.length, &frame);
     if (pc != GIN_PHOENIX_OK) { code = pc == GIN_PHOENIX_NOMEM ? GIN_SESSION_NOMEM : GIN_SESSION_ROUTE; goto done; }
     code = render_code(gin_render_event(frame, &rc, v->observed_epoch, v->receive_ms, record));
+    /* The DOM was attested above; presence alone selects strict decoding. Never
+     * extract an ID here or infer persisted progress from an ordinary record. */
+    if (code == GIN_SESSION_OK && scope && message && *record &&
+        json_object_get(row, "id")) {
+        code = history_code(gin_history_live_decode(frame, &rc, scope,
+            v->observed_epoch, history));
+        if (code != GIN_SESSION_OK) {
+            gin_render_record_free(*record); *record = NULL;
+            gin_history_page_free(*history); *history = NULL;
+        }
+    }
     if (code == GIN_SESSION_OK && !message && strcmp(kind, "joined") &&
         strcmp(kind, "window_invite_declined")) *terminal = 1;
 done:
     gin_phoenix_frame_free(frame); gin_phoenix_bytes_free(&encoded); json_decref(o);
     return code;
+}
+
+enum gin_session_code gin_live_project(const struct gin_live_view *v,
+    const struct gin_live_projection *c, const struct gin_topology *topology,
+    struct gin_topology **next, struct gin_render_record **record, int *terminal)
+{
+    return project(v, c, topology, next, record, terminal, NULL, NULL);
+}
+
+enum gin_session_code gin_live_project_history(const struct gin_live_view *v,
+    const struct gin_live_projection *c, const struct gin_topology *topology,
+    struct gin_topology **next, struct gin_render_record **record, int *terminal,
+    const struct gin_history_scope *scope, struct gin_history_page **history)
+{
+    if (!scope || !history || *history) return GIN_SESSION_INVALID;
+    return project(v, c, topology, next, record, terminal, scope, history);
 }

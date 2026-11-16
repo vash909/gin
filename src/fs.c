@@ -1,6 +1,7 @@
 
 #include "gin_fs.h"
 #include "gin_naming.h"
+#include "fs_private.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -373,6 +374,32 @@ done:
         (void)close(netfd);
     errno = saved;
     return result;
+}
+
+int
+gin_root_window_open(const struct gin_root *root, const char *network,
+                     const char *target, const char *chantypes)
+{
+    struct gin_name name;
+    int netfd, winfd, saved;
+    if (!root || root->rootfd < 0 || root->lockfd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1)
+        return -1;
+    netfd = input_dir(root->rootfd, name.network_component);
+    if (netfd == -1) return -1;
+    winfd = input_dir(netfd, name.window_component);
+    saved = errno;
+    if (close(netfd) == -1 && winfd != -1) {
+        saved = errno;
+        (void)close(winfd);
+        winfd = -1;
+    }
+    errno = saved;
+    return winfd;
 }
 
 int

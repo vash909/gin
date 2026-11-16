@@ -32,8 +32,10 @@ is an independent C99/POSIX file/FIFO frontend skeleton for Grappa's
 REST resources and Phoenix Channels events. It is not an IRC client.
 Local init/check/run remain unchanged. Separate connect/connect-check and
 credential-import commands provide verified HTTPS/WSS startup and live selected-
-window plaintext reception with FIFO SEND/JOIN/PART/QUERY. Reconnect, history
-and E2EE remain deferred; this is not a beta. Live Grappa
+window plaintext reception with FIFO SEND/JOIN/PART/QUERY. The 18.4 development
+candidate integrates heartbeat, finite reconnect, bounded history and automatic
+restart checkpoints; qualification is pending, not shipped 18.4 completion.
+E2EE remains deferred; this is not a beta. Live Grappa
 interoperability is unqualified.
 .SH COMMANDS
 .TP
@@ -92,13 +94,18 @@ Existing local invocations never silently connect or change format.
 .PP
 The separate SESSION_FILE uses legacy safe0600, byte/line, no-final-symlink and
 duplicate/unknown/control-byte rules. Keys are root/network/target/chantypes,
-origin/mode/ca_file/connect_ms/total_ms/join_ms/startup_ms. Explicit HTTPS authority
+origin/mode/ca_file/connect_ms/total_ms/join_ms/startup_ms, plus
+heartbeat_interval_ms/heartbeat_timeout_ms/retry_base_ms/retry_cap_ms/max_retries.
+Explicit HTTPS authority
 and mode=plain are required; no userinfo/path/query/fragment or insecure fallback.
 Plain is an owner assertion, not server encryption attestation or E2EE support.
 Origin limit is 1024 bytes, CA path4095; existing naming bounds remain.
 Timers are canonical positive decimal milliseconds: connect/total/join<=60000,
 startup<=600000, effective total>=connect. Defaults1500/3000/3000/30000;
-import uses10000/20000 per-request connect/total limits.
+import uses10000/20000 per-request connect/total limits. Heartbeat interval/timeout
+default30000/10000ms; retry base/cap default1000/30000ms, max_retries default5.
+These are settings keys, not new flags. Heartbeat/backoff values are positive
+and bounded by native liveness policy, base<=cap; only max_retries accepts zero.
 .PP
 The one foreground owner does fresh config/bound-me/boot, then fresh
 config/bound-me/verified same-authority WSS and correlated required subscriptions.
@@ -132,8 +139,11 @@ runs while resources are held.
 stops, data fails, HUP alone is not EOF. Without -E stdin is ignored, including
 /dev/null. Neither option is a chat command/input path.
 .PP
-Before READY the selected FIFO reader and safe output are initialized, preserving
-existing logs. Complete LF records within input and actual PIPE_BUF bounds
+Before first READY the selected safe output/checkpoint is validated, quiet
+history catch-up is published and the FIFO reader is opened, preserving existing
+logs. A legitimate absent window is staged transiently and created only after
+current joins, route authority and receive drain, never to repair unsafe state.
+Complete LF records within input and actual PIPE_BUF bounds
 dispatch literal SEND or typed /join CHANNEL, /part CHANNEL and /query NICK.
 Controls do not change the selected destination. Selected PART reports its
 outcome and terminates without executing buffered following input. JOIN/PART
@@ -149,20 +159,35 @@ reports INPUT REJECTED and ends the owner; empty input is ignored. Full/broken
 receipt sinks fail without waiting or replay; terminal failure cannot undo
 effects. No -O means no OP1 output; -R stays READY-only and -E stays stdin-only.
 Clean FIFO writer EOF retains the reader with a checked100ms cooldown, not an
-owner stop. Partial EOF input is rejected. No local echo or retry is enabled.
+owner stop. Partial EOF input is rejected. No local echo or outgoing retry is enabled.
 .PP
-SIGINT/TERM stop cleanly after existing synchronous aggregate startup/send/control calls
-return; later internal requests may still occur before that return. Per-request
-and startup deadlines are not hard wall-clock bounds on files, resolver cleanup
-or scheduling. Service waits at most50ms per quantum. No immediate abort,
-heartbeat/retry, history or sustained healthy-session lifetime is
-promised. Output failures are terminal and can leave a written prefix; no
+SIGINT/TERM and observed stdin EOF under -E request cooperative stop. Controlled initial,
+native and recovery HTTP checks stop/stdin/deadlines. During live HTTP, HTTP is
+the sole blocking waiter; native WSS service and bounded metadata projection
+run outside curl callbacks, reducing waits against native deadlines. Per-request
+and episode deadlines are not hard wall-clock bounds on files, DNS/TLS, resolver
+cleanup or scheduling. Service waits at most50ms per quantum. Entered mutations
+can remain UNCERTAIN; stop cannot undo effects. Output failures are terminal and
+can leave a written prefix; no
 rollback, replay, crash-atomic append or durable exactly-once guarantee. Existing
 log bytes/inodes are preserved, not truncated. No extra discovered windows are
 projected. Teardown frees session/HTTP/children before root release, restores
 caller signal policy and never unlinks the persistent lock. API status0 is not
 proof of reaching READY or recipient delivery; errors1/2 retain runtime/config
 meanings. See docs/SESSION.md for the complete contract and limits.
+.PP
+Native heartbeat and capped backoff consume a finite configured lifetime retry
+budget, not reset by traffic or history. Every active command has its terminal
+OP1 outcome published before first fresh recovery HTTP when -O is enabled; failed
+publication prevents recovery. No SEND/QUERY/JOIN/PART is replayed. Selected PART
+still terminates. Catch-up blocks FIFO until staged, visibly drained output is
+published, including quiet startup before first READY. An eligible native failure
+may use unused retry budget only after old-authority metadata drain; HTTP/auth/
+decode/output/limit failures and stop/deadline expiry do not authorize blind retry.
+Retries preserve the original initial or current recovery-episode deadline. Each
+history attempt has a cooperative60s budget. A fresh epoch discards uncommitted
+staging/live IDs, uses the actual new epoch/own nick and retains committed
+progress and the same held root/output. Query ACK is not inventory authority.
 .SH OPTIONS
 .TP
 .BI \-f " FILE"
@@ -278,10 +303,12 @@ are completed without deleting logs or replacing existing valid FIFO/log inodes.
 Directories created with mode 0700, regardless of the caller's umask.
 .TP
 .I ROOT/NETWORK/WINDOW/in
-A FIFO with mode 0600. Only run starts a reader; writing without one may block.
+A FIFO with mode 0600. run or the selected connect owner starts a reader;
+writing without one may block.
 Query its PIPE_BUF and write each complete LF record in one atomic write within
 that bound and the separate 4096-byte payload bound. Controls C0/DEL other than
-LF reject a whole record; high bytes remain opaque. No commands or sending exist.
+LF reject a whole record; high bytes remain opaque. run cannot send; connect
+supports only its declared literal SEND and minimal typed controls.
 Observed EOF rejects partial records. The reader retains its secure descriptor
 and uses a monotonic 100ms backoff to avoid HUP spin and support later writers.
 .TP
@@ -291,6 +318,28 @@ Existing log bytes and inode are preserved on repeated initialization.
 Initialization writes no events or placeholders. The connected receive owner
 appends eligible plaintext records only for its selected window. O_APPEND is an
 open flag, not a filesystem append-only attribute.
+.TP
+.I ROOT/NETWORK/WINDOW/.gin.checkpoint
+Automatic private selected-output restart metadata for connect, not a public
+protocol/interface or user-editable anchor. Effective-user-owned, regular,
+single-link, exactly0600 and no-follow under the safe0700 root. Binding includes
+exact origin, credential subject_id UUID (not display subject or bearer), numeric
+network ID, exact slug, canonical target, chantypes/plaintext role and output
+device/inode/size. Epoch and own nick are transient attempt scope only.
+Validated missing metadata means UNKNOWN, anchor0/unknown_before1; malformed,
+unsafe, scope or inode/size errors stop without append, repair or truncation.
+An actual successful append may publish anchor0 with UNKNOWN retained.
+Progress advances only through complete actually appended REST-eligible prefixes,
+never maximum live IDs, fetch cursor alone or read cursor. REST18 plus live19 can
+checkpoint18; later strict after18 REST20 plus live21 can checkpoint20. Incoming
+duplicate tails remain possible across restart/reconnect.
+Atomic replacement/fsync failure before rename preserves old metadata; a
+post-rename directory-fsync error may follow publication, without rollback or
+permission to replay. Append and metadata are not transactional. Matching inode/
+size does not authenticate content or server generation, prove durability or
+constitute a remote ACK. Close private checkpoint descriptors before borrowed
+output/root; never acquire a second lock fd. Trusted ancestors/cooperating
+same-UID writers are assumed, not malicious-same-UID protection.
 .SH SECURITY
 Existing directories and endpoints must have the expected type, exact
 permissions (including no special mode bits), and effective-user ownership.
@@ -345,7 +394,8 @@ with verified HTTPS discovery, stored-origin/account-identity checks, and
 /boot plus root-first WSS subscriptions under the connected owner; native
 Phoenix codec and authentication are implemented APIs. Selected-window live
 plaintext projection and FIFO message/control sending are wired in;
-reconnection, history and end-to-end encryption remain deferred.
+finite reconnection, bounded history and automatic restart checkpoints are
+integrated in the 18.4 candidate, not yet fully qualified. E2EE remains deferred.
 .B gin run
 remains local-only with unsupported sending.
 .PP
@@ -353,8 +403,9 @@ run uses POSIX poll and an async-signal-safe self-pipe for SIGINT/SIGTERM.
 The runtime closes input/wake descriptors before releasing the root lock and
 restores previous signal dispositions and mask. Connected receive uses explicit
 mode=plain as an owner assertion, not server encryption attestation or complete
-ciphertext detection; there is no plaintext fallback. Automatic
-reconnection and history recovery are not wired into that command. Connected
+ciphertext detection; there is no plaintext fallback. Incoming duplicate tails,
+partial append and crash ambiguity remain; no gap completeness, exactly-once or
+power-loss durability is promised. Connected
 policy declares client protocol36 and requires server protocol36, including
 dm_with; this is not a claim of all upstream features. No live Grappa revision
 or recipient delivery is qualified.

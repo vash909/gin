@@ -47,7 +47,7 @@ int main(int argc, char **argv)
     struct gin_query_result r;
     enum gin_connect_code code;
     unsigned i;
-    int floor, fd;
+    int floor, fd, expect_timeout;
     unsigned deadline;
     assert(argc == 5);
     floor = !strcmp(argv[3], "config-floor") || !strcmp(argv[3], "root-floor");
@@ -55,11 +55,12 @@ int main(int argc, char **argv)
     strcpy(c.token, "aa~"); strcpy(c.subject_name, "Alice"); strcpy(c.subject_id, "12345678-1234-1234-1234-123456789abc");
     settings.http.origin = c.origin; settings.http.ca_file = argv[2]; settings.http.connect_ms = 1500; settings.http.total_ms = 3000;
     settings.policy.client_protocol = 4; settings.policy.required_server_protocol = 1; settings.join_ms = 1000;
-    deadline = 150;
+    expect_timeout = !strcmp(argv[3], "silent") || !strcmp(argv[3], "uncorrelated");
+    /* Positive matching is not a transport scheduling benchmark. */
+    deadline = expect_timeout ? 150 : 5000;
     if (getenv("GIN_QUERY_PREFIX") != NULL) {
         settings.http.connect_ms = 5000; settings.http.total_ms = 10000;
         settings.join_ms = 5000;
-        if (strcmp(argv[3], "silent")) deadline = 5000;
     }
     assert(gin_http_global_init() == GIN_HTTP_OK);
     assert(gin_topology_parse_boot((const unsigned char *)boot, strlen(boot), "#", &o.topology) == GIN_TOPOLOGY_OK);
@@ -96,9 +97,14 @@ int main(int argc, char **argv)
         r = gin_connect_query_result(o.s);
         if (!strcmp(argv[3], "error")) assert(r.code == GIN_QUERY_REMOTE && r.outcome == GIN_QUERY_REMOTE_FAILURE);
         else if (!strcmp(argv[3], "unknown") || !strcmp(argv[3], "malformed")) assert(r.code == GIN_QUERY_MALFORMED && r.outcome == GIN_QUERY_UNCERTAIN);
-        else if (!strcmp(argv[3], "silent")) assert(r.code == GIN_QUERY_TIMEOUT && r.outcome == GIN_QUERY_UNCERTAIN);
+        else if (expect_timeout) assert(r.code == GIN_QUERY_TIMEOUT && r.outcome == GIN_QUERY_UNCERTAIN);
         else if (!strcmp(argv[3], "disconnect") || !strcmp(argv[3], "reconnect")) assert(r.outcome == GIN_QUERY_UNCERTAIN);
-        else assert(r.code == GIN_QUERY_OK && r.outcome == GIN_QUERY_ACCEPTED);
+        else {
+            if (r.code != GIN_QUERY_OK || r.outcome != GIN_QUERY_ACCEPTED)
+                fprintf(stderr, "query fixture mode=%s deadline_ms=%u code=%d outcome=%d\n",
+                        argv[3], deadline, (int)r.code, (int)r.outcome);
+            assert(r.code == GIN_QUERY_OK && r.outcome == GIN_QUERY_ACCEPTED);
+        }
         assert(r.operation_id == 42 && r.socket_epoch == 1 && !strcmp(r.join_ref, "1") && !strcmp(r.request_ref, "2"));
         assert(gin_connect_open_query(o.s, o.topology, "Net", "Bob", "#", GIN_QUERY_MODE_PLAIN, 43, 100) == GIN_QUERY_BUSY);
         if (!strcmp(argv[3], "before") || !strcmp(argv[3], "after")) {

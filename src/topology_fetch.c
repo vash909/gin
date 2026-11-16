@@ -1,4 +1,5 @@
 #include "topology_internal.h"
+#include "http_control.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,9 +47,9 @@ static enum gin_topology_code auth_code(enum gin_auth_code code)
     return GIN_TOPOLOGY_REMOTE;
 }
 
-enum gin_topology_code gin_topology_fetch(const struct gin_auth_settings *s,
+static enum gin_topology_code topology_fetch(const struct gin_auth_settings *s,
     const struct gin_protocol_policy *policy, const struct gin_credential *credential,
-    const char *chantypes, struct gin_topology **out)
+    const char *chantypes, struct gin_topology **out, struct gin_http_control *control)
 {
     struct gin_protocol_policy effective;
     struct gin_protocol_info server;
@@ -70,10 +71,16 @@ enum gin_topology_code gin_topology_fetch(const struct gin_auth_settings *s,
     effective = *policy;
     if (effective.required_server_protocol < GIN_TOPOLOGY_SERVER_MIN)
         effective.required_server_protocol = GIN_TOPOLOGY_SERVER_MIN;
-    code = protocol_code(gin_protocol_fetch(s, &effective, &server));
+    code = protocol_code(control ? gin_protocol_fetch_controlled(s,&effective,&server,control) :
+        gin_protocol_fetch(s,&effective,&server));
+    if (control && control->aborted) return GIN_TOPOLOGY_TRANSPORT;
     if (code != GIN_TOPOLOGY_OK) return code;
     memset(&validated, 0, sizeof(validated));
-    code = auth_code(gin_auth_identity(s, credential, &validated));
+    code = auth_code(control ? gin_auth_identity_controlled(s,credential,&validated,control) :
+        gin_auth_identity(s,credential,&validated));
+    if (control && control->aborted) {
+        gin_credential_clear(&validated); return GIN_TOPOLOGY_TRANSPORT;
+    }
     if (code != GIN_TOPOLOGY_OK) {
         gin_credential_clear(&validated);
         return code;
@@ -90,7 +97,8 @@ enum gin_topology_code gin_topology_fetch(const struct gin_auth_settings *s,
     request.settings = &transport; request.method = GIN_HTTP_GET;
     request.bearer = validated.token; request.bearer_origin = validated.origin;
     request.json_body = NULL; request.json_length = 0;
-    result = gin_http_request(&request, body, GIN_TOPOLOGY_BODY_MAX);
+    result = control ? gin_http_request_controlled(&request,body,GIN_TOPOLOGY_BODY_MAX,control) :
+        gin_http_request(&request,body,GIN_TOPOLOGY_BODY_MAX);
     switch (result.code) {
     case GIN_HTTP_OK: case GIN_HTTP_STATUS:
         code = result.http_status == 200 ?
@@ -108,4 +116,17 @@ enum gin_topology_code gin_topology_fetch(const struct gin_auth_settings *s,
     wipe(url, sizeof(url));
     gin_credential_clear(&validated);
     return code;
+}
+
+enum gin_topology_code gin_topology_fetch(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, const struct gin_credential *credential,
+    const char *chantypes, struct gin_topology **out)
+{
+    return topology_fetch(s,policy,credential,chantypes,out,NULL);
+}
+enum gin_topology_code gin_topology_fetch_controlled(const struct gin_auth_settings *s,
+    const struct gin_protocol_policy *policy, const struct gin_credential *credential,
+    const char *chantypes, struct gin_topology **out, struct gin_http_control *control)
+{
+    return topology_fetch(s,policy,credential,chantypes,out,control);
 }

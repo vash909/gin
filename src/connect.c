@@ -1,4 +1,5 @@
 #include "gin_connect.h"
+#include "connect_control.h"
 #include "json_evidence.h"
 #include "gin_liveness.h"
 #include "liveness_values.h"
@@ -41,6 +42,9 @@ struct gin_connect {
     gin_connect_frame_fn callback;
     void *user;
     CURL *curl;
+    CURLM *upgrade_multi;
+    int multi_added, cleanup_bad, quarantined;
+    int service_budget_exhausted;
     struct curl_slist *headers;
     curl_socket_t socket;
     struct timespec deadline;
@@ -156,9 +160,9 @@ struct gin_liveness_status gin_connect_liveness_status(const struct gin_connect 
     struct timespec t;
     return liveness_at(s, s && s->configured && read_clock(s, &t) ? &t : NULL);
 }
-static enum gin_connect_code start_attempt(struct gin_connect *s);
+static enum gin_connect_code start_attempt(struct gin_connect *s, struct gin_http_control *control);
 static enum gin_connect_code fail(struct gin_connect *s, enum gin_connect_code c);
-enum gin_retry_step gin_connect_retry(struct gin_connect *s)
+static enum gin_retry_step connect_retry(struct gin_connect *s, struct gin_http_control *control)
 {
     struct gin_liveness_status v;
     struct timespec t;
@@ -176,7 +180,15 @@ enum gin_retry_step gin_connect_retry(struct gin_connect *s)
     case GIN_LIVENESS_DUE: break;
     default: return GIN_RETRY_NOT_DUE;
     }
-    s->retries_used++; (void)start_attempt(s); return GIN_RETRY_ATTEMPTED;
+    s->retries_used++; (void)start_attempt(s,control); return GIN_RETRY_ATTEMPTED;
+}
+enum gin_retry_step gin_connect_retry(struct gin_connect *s)
+{
+    return connect_retry(s,NULL);
+}
+enum gin_retry_step gin_connect_retry_controlled(struct gin_connect *s, struct gin_http_control *control)
+{
+    return connect_retry(s,control);
 }
 struct gin_query_result gin_connect_query_result(const struct gin_connect *s)
 { struct gin_query_result r = {0}; return s ? s->query : r; }
@@ -250,9 +262,32 @@ static void query_abort(struct gin_connect *s, enum gin_query_code code)
 static void transport_close(struct gin_connect *s)
 {
     size_t i;
-    s->receive_drained = s->text_partial = 0;
+    s->receive_drained = s->text_partial = s->service_budget_exhausted = 0;
+    if (s->quarantined) return;
+    if (s->upgrade_multi && s->multi_added) {
+        if (curl_multi_remove_handle(s->upgrade_multi,s->curl)!=CURLM_OK) {
+            s->cleanup_bad=1;
+            /* Both owned handles remain alive: retry removal once. Pinned curl
+             * also accepts an already-detached easy after a late remove error.
+             * Multi cleanup alone can lose a connect-only connection: preserve
+             * remove -> easy -> multi ordering even on this error path. */
+            if (curl_multi_remove_handle(s->upgrade_multi,s->curl)!=CURLM_OK) {
+                /* Unresolved membership: retain referenced storage and global
+                 * state, rather than attempting an unsafe or leaky teardown. */
+                s->quarantined=1; return;
+            }
+        }
+        s->multi_added=0;
+    }
     if (s->curl) curl_easy_cleanup(s->curl);
     s->curl = NULL;
+    if (s->upgrade_multi) {
+        CURLM *multi=s->upgrade_multi;
+        s->upgrade_multi=NULL;
+        if (curl_multi_cleanup(multi)!=CURLM_OK) {
+            s->cleanup_bad=1; s->quarantined=1; return;
+        }
+    }
     {
         struct curl_slist *h;
         for (h = s->headers; h; h = h->next) if (h->data) wipe(h->data, strlen(h->data));
@@ -307,7 +342,9 @@ static enum gin_connect_code fail(struct gin_connect *s, enum gin_connect_code c
             c = GIN_CONNECT_CLOCK; s->transient = 0; s->reason = GIN_LIVENESS_REASON_CLOCK;
         }
     }
-    transport_close(s); s->state = GIN_CONNECT_FAILED; s->result.code = c; return c;
+    transport_close(s);
+    if (s->cleanup_bad) s->transient=0; /* Preserve primary code/clock reason. */
+    s->state = GIN_CONNECT_FAILED; s->result.code = c; return c;
 }
 static enum gin_connect_code local_transport_failure(struct gin_connect *s)
 {
@@ -366,6 +403,22 @@ static long poll_budget(struct gin_connect *s, const struct timespec *end)
     if (s->heartbeat != GIN_HEARTBEAT_OFF &&
         (n = remaining(s, s->heartbeat == GIN_HEARTBEAT_SCHEDULED ? &s->heartbeat_due : &s->heartbeat_deadline)) < wait) wait = n;
     return wait > INT_MAX ? INT_MAX : wait;
+}
+/* Private scheduling only: never polls and never treats a partial frame's
+ * AGAIN as productive backlog. Both HTTP and WS keep independent ownership. */
+enum gin_connect_code gin_connect_http_wait_budget(struct gin_connect *s, unsigned *wait)
+{
+    struct timespec end;
+    long n;
+    if (!s || !wait || s->in_callback || *wait>GIN_CONNECT_SERVICE_MAX_MS)
+        return GIN_CONNECT_INVALID;
+    if (s->state==GIN_CONNECT_IDLE || s->state==GIN_CONNECT_CONNECTING) return GIN_CONNECT_INVALID;
+    if (s->state!=GIN_CONNECT_JOINING && s->state!=GIN_CONNECT_READY) return s->result.code;
+    if (!deadline(s,&end,(long)*wait)) return fail(s,GIN_CONNECT_TRANSPORT);
+    n=poll_budget(s,&end);
+    if (s->clock_bad) return fail(s,GIN_CONNECT_TRANSPORT);
+    *wait=s->service_budget_exhausted?0u:(unsigned)n;
+    return GIN_CONNECT_OK;
 }
 static int available(void)
 {
@@ -480,16 +533,64 @@ static enum gin_connect_code queue_join(struct gin_connect *s)
     if (!deadline(s, &s->deadline, s->settings.join_ms)) return fail(s, GIN_CONNECT_TRANSPORT);
     return GIN_CONNECT_OK;
 }
-enum gin_connect_code gin_connect_start(struct gin_connect *s)
+static enum gin_connect_code connect_start(struct gin_connect *s, struct gin_http_control *control)
 {
     if (!s || s->in_callback || s->session_expired) return GIN_CONNECT_INVALID;
     s->receive_drained = 0;
     if (s->configured && s->started)
-        return gin_connect_retry(s) == GIN_RETRY_ATTEMPTED ? s->result.code : GIN_CONNECT_INVALID;
+        return connect_retry(s,control) == GIN_RETRY_ATTEMPTED ? s->result.code : GIN_CONNECT_INVALID;
     if (s->configured && s->cancelled) return GIN_CONNECT_INVALID;
-    return start_attempt(s);
+    return start_attempt(s,control);
 }
-static enum gin_connect_code start_attempt(struct gin_connect *s)
+enum gin_connect_code gin_connect_start(struct gin_connect *s)
+{
+    return connect_start(s,NULL);
+}
+enum gin_connect_code gin_connect_start_controlled(struct gin_connect *s, struct gin_http_control *control)
+{
+    return connect_start(s,control);
+}
+/* Dedicated connect-only loop: unlike ordinary HTTP, successful easy/multi
+ * membership remains owned by the Native object for subsequent WS I/O. */
+static CURLcode controlled_upgrade(struct gin_connect *s, struct gin_http_control *control,
+    int *local_error)
+{
+    unsigned wait=50u;
+    if (control->aborted) return CURLE_ABORTED_BY_CALLBACK;
+    if (control->tick(control->opaque,&wait)) {
+        control->aborted=1; return CURLE_ABORTED_BY_CALLBACK;
+    }
+    s->upgrade_multi=curl_multi_init();
+    if (!s->upgrade_multi) { *local_error=1; return CURLE_FAILED_INIT; }
+    if (curl_multi_add_handle(s->upgrade_multi,s->curl)!=CURLM_OK) {
+        *local_error=1; return CURLE_FAILED_INIT;
+    }
+    s->multi_added=1;
+    for (;;) {
+        CURLMsg *message;
+        int running=0, remaining=0;
+        wait=50u;
+        if (control->aborted || control->tick(control->opaque,&wait)) {
+            control->aborted=1; return CURLE_ABORTED_BY_CALLBACK;
+        }
+        if (curl_multi_perform(s->upgrade_multi,&running)!=CURLM_OK) {
+            *local_error=1; return CURLE_RECV_ERROR;
+        }
+        if (control->aborted || control->tick(control->opaque,&wait)) {
+            control->aborted=1; return CURLE_ABORTED_BY_CALLBACK;
+        }
+        while ((message=curl_multi_info_read(s->upgrade_multi,&remaining))!=NULL) {
+            if (message->msg==CURLMSG_DONE && message->easy_handle==s->curl)
+                return message->data.result;
+        }
+        if (!running) { *local_error=1; return CURLE_RECV_ERROR; }
+        if (wait>50u) wait=50u;
+        if (curl_multi_poll(s->upgrade_multi,NULL,0,(int)wait,NULL)!=CURLM_OK) {
+            *local_error=1; return CURLE_RECV_ERROR;
+        }
+    }
+}
+static enum gin_connect_code start_attempt(struct gin_connect *s, struct gin_http_control *control)
 {
     struct gin_protocol_info info;
     struct gin_credential identity;
@@ -498,12 +599,14 @@ static enum gin_connect_code start_attempt(struct gin_connect *s)
     CURLcode c;
     if (!s || s->in_callback || s->session_expired || s->query.outcome != GIN_QUERY_NONE || s->state == GIN_CONNECT_CONNECTING || s->state == GIN_CONNECT_JOINING || s->state == GIN_CONNECT_READY)
         return GIN_CONNECT_INVALID;
+    if (s->cleanup_bad) return local_transport_failure(s);
     if (!s->configured) { s->clock_bad = 0; s->have_observed = 0; }
     s->started = 1;
     if (s->result.socket_epoch == UINT64_MAX) return fail(s, GIN_CONNECT_LIMIT);
     {
         uint64_t epoch = s->result.socket_epoch + 1u;
         transport_close(s);
+        if (s->cleanup_bad) return local_transport_failure(s);
         memset(&s->result, 0, sizeof(s->result));
         s->result.socket_epoch = epoch;
     }
@@ -511,11 +614,19 @@ static enum gin_connect_code start_attempt(struct gin_connect *s)
     s->failure_reason = GIN_LIVENESS_REASON_NONE; s->reason = GIN_LIVENESS_REASON_NONE;
     /* Reuse no request references or transport state across explicit attempts. */
     if (!available()) return fail(s, GIN_CONNECT_UNAVAILABLE);
-    s->result.protocol = gin_protocol_fetch(&s->settings.http, &s->settings.policy, &info);
-    if (s->result.protocol != GIN_PROTOCOL_OK) return fail(s, GIN_CONNECT_PREFLIGHT);
+    s->result.protocol = control ?
+        gin_protocol_fetch_controlled(&s->settings.http,&s->settings.policy,&info,control) :
+        gin_protocol_fetch(&s->settings.http,&s->settings.policy,&info);
+    if ((control && control->aborted) || s->result.protocol!=GIN_PROTOCOL_OK)
+        return fail(s,GIN_CONNECT_PREFLIGHT);
     s->config_protocol = info.server_protocol; s->root_protocol = 0;
     s->result.auth_attempted = 1;
-    s->result.auth = gin_auth_identity(&s->settings.http, &s->credential, &identity);
+    s->result.auth = control ?
+        gin_auth_identity_controlled(&s->settings.http,&s->credential,&identity,control) :
+        gin_auth_identity(&s->settings.http,&s->credential,&identity);
+    if (control && control->aborted) {
+        gin_credential_clear(&identity); return fail(s,GIN_CONNECT_TRANSPORT);
+    }
     if (s->result.auth != GIN_AUTH_OK) {
         enum gin_connect_code code = GIN_CONNECT_UNAUTHORIZED;
         if (s->result.auth == GIN_AUTH_SCOPE) code = GIN_CONNECT_SCOPE;
@@ -558,7 +669,13 @@ static enum gin_connect_code start_attempt(struct gin_connect *s)
     OPT(CURLOPT_HEADERFUNCTION, header); OPT(CURLOPT_HEADERDATA, s);
     OPT(CURLOPT_WRITEFUNCTION, discard); OPT(CURLOPT_VERBOSE, 0L);
 #undef OPT
-    c = curl_easy_perform(s->curl);
+    {
+        int local_error=0;
+        c=control ? controlled_upgrade(s,control,&local_error) : curl_easy_perform(s->curl);
+        /* Owner abort is authoritative, never forgiven as an HTTP rejection. */
+        if (control && control->aborted) return fail(s,GIN_CONNECT_CLOSED);
+        if (local_error) return local_transport_failure(s);
+    }
     if (curl_easy_getinfo(s->curl, CURLINFO_RESPONSE_CODE, &s->result.http_status) != CURLE_OK)
         return c != CURLE_OK ? fail(s, curl_error(c)) : local_transport_failure(s);
     if (s->header_limit) return fail(s, GIN_CONNECT_LIMIT);
@@ -667,7 +784,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
     size_t bytes = 0;
     int polled = 0;
     struct timespec end;
-    if (s) s->receive_drained = 0;
+    if (s) { s->receive_drained = 0; s->service_budget_exhausted=0; }
     if (!s || s->in_callback || max_wait_ms > GIN_CONNECT_SERVICE_MAX_MS) return GIN_CONNECT_INVALID;
     if (s->state == GIN_CONNECT_IDLE || s->state == GIN_CONNECT_CONNECTING) return GIN_CONNECT_INVALID;
     if (s->state != GIN_CONNECT_JOINING && s->state != GIN_CONNECT_READY) return s->result.code;
@@ -753,6 +870,7 @@ enum gin_connect_code gin_connect_service(struct gin_connect *s, unsigned max_wa
             if (p.revents & POLLNVAL) return local_transport_failure(s);
         }
     }
+    s->service_budget_exhausted=operations>=GIN_CONNECT_OPERATIONS_MAX || bytes>=GIN_CONNECT_IO_MAX;
     return timers(s);
 }
 void gin_connect_close(struct gin_connect *s)
@@ -765,10 +883,16 @@ void gin_connect_close(struct gin_connect *s)
 void gin_connect_free(struct gin_connect *s)
 {
     if (!s) return;
-    transport_close(s); gin_phoenix_stream_free(s->stream);
+    transport_close(s);
+    if (s->quarantined) return; /* Fatal library-state anomaly: process restart. */
+    gin_phoenix_stream_free(s->stream);
     gin_credential_clear(&s->credential);
     free(s->origin); free(s->ca); wipe(s, sizeof(*s)); free(s);
 }
+int gin_connect_cleanup_failed(const struct gin_connect *s)
+{ return s && s->cleanup_bad; }
+int gin_connect_quarantined(const struct gin_connect *s)
+{ return s && s->quarantined; }
 enum gin_connect_state gin_connect_get_state(const struct gin_connect *s)
 { return s ? s->state : GIN_CONNECT_STOPPED; }
 int gin_connect_receive_drained(const struct gin_connect *s)
