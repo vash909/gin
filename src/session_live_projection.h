@@ -27,4 +27,15 @@ enum gin_session_code gin_live_project_history(const struct gin_live_view *view,
     const struct gin_live_projection *context, const struct gin_topology *topology,
     struct gin_topology **next, struct gin_render_record **record, int *terminal,
     const struct gin_history_scope *scope, struct gin_history_page **history);
+/* Explicit STATUS-only owner projection, outside callbacks. The owner binds the
+ * credential UUID independently of the display subject and supplies the actual
+ * CURRENT JOINED Native source index/topic/ref/epoch snapshot. This helper cannot
+ * authenticate an index or infer authority from a filename. No window discovery,
+ * creation, topology mutation or I/O. Both outputs require fresh NULL and are
+ * owned on success; any failure publishes neither. Non-message metadata is ignored
+ * only after whole-payload validity/evidence and encryption guards. */
+enum gin_session_code gin_live_project_status_history(const struct gin_live_view *view,
+    const struct gin_live_projection *context, const struct gin_topology *topology,
+    const struct gin_history_scope *scope, struct gin_render_record **record,
+    struct gin_history_page **history);
 #endif

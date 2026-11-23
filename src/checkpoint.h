@@ -1,6 +1,7 @@
 #ifndef GIN_CHECKPOINT_H
 #define GIN_CHECKPOINT_H
 #include "gin_fs.h"
+#include "fs_private.h"
 #include "gin_history.h"
 #define GIN_CHECKPOINT_FILENAME ".gin.checkpoint"
 #define GIN_CHECKPOINT_BYTES_MAX 8192u
@@ -26,6 +27,20 @@ struct gin_checkpoint_write_result {
  * naming policy. No bearer, message body, read cursor or REST fetch cursor.
  * Local v1 storage is bounded canonical binary, not a recursive JSON decoder. */
 enum gin_checkpoint_code gin_checkpoint_open(const struct gin_root *,
+    const struct gin_history_scope *, int output,
+    struct gin_checkpoint **, struct gin_checkpoint_progress *);
+/* Explicit private codec opt-in. Only compiled trusted pure lexical callbacks;
+ * NULL is invalid. Preparation and existing-window traversal share this codec.
+ * Same borrowed lifetimes, guards and binary v1 identity as the legacy API.
+ * This is storage only, not account/root authentication or adoption. */
+enum gin_checkpoint_code gin_checkpoint_open_named(const struct gin_root *,
+    const struct gin_history_scope *, int output,
+    struct gin_checkpoint **, struct gin_checkpoint_progress *, gin_fs_name_prepare_fn);
+/* Explicit network storage for STATUS with exact target "$server" only.
+ * Existing network directory and its borrowed append out; never window fallback.
+ * Same binary v1 key, validation, ownership and publication rules as above.
+ * This storage primitive does not establish account or credential policy. */
+enum gin_checkpoint_code gin_checkpoint_open_network(const struct gin_root *,
     const struct gin_history_scope *, int output,
     struct gin_checkpoint **, struct gin_checkpoint_progress *);
 /* Call ONLY after complete successful output. safe_anchor is an independently

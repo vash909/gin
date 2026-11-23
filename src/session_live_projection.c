@@ -1,8 +1,23 @@
 #include "session_live_projection.h"
 #include "history_evidence.h"
 #include "history_values.h"
+#include "connect_values.h"
 #include <jansson.h>
 #include <string.h>
+
+static int status_reserved(json_t *row)
+{
+    const char *kind = json_string_value(json_object_get(row, "kind"));
+    json_t *body = json_object_get(row, "body");
+    const char *s = json_string_value(body);
+    size_t i, n = s ? json_string_length(body) : 0;
+    if (kind && !strncmp(kind, "e2e_", 4)) return 1;
+    for (i = 0; i + 3u < n; ++i)
+        if (s[i] == 1 && !memcmp(s + i + 1u, "E2E", 3)) return 1;
+    return 0;
+}
+
+
 
 int gin_live_receive_ms(const struct timespec *wall, int64_t *out)
 {
@@ -203,4 +218,93 @@ enum gin_session_code gin_live_project_history(const struct gin_live_view *v,
 {
     if (!scope || !history || *history) return GIN_SESSION_INVALID;
     return project(v, c, topology, next, record, terminal, scope, history);
+}
+
+enum gin_session_code gin_live_project_status_history(const struct gin_live_view *v,
+    const struct gin_live_projection *c, const struct gin_topology *topology,
+    const struct gin_history_scope *scope, struct gin_render_record **record,
+    struct gin_history_page **history)
+{
+    const struct gin_topology_network *net;
+    struct gin_render_context rc;
+    struct gin_phoenix_bytes encoded = {NULL, 0};
+    struct gin_phoenix_frame *frame = NULL;
+    struct gin_render_record *temporary = NULL;
+    struct gin_history_page *page = NULL;
+    json_error_t error = {0};
+    json_t *o = NULL, *row;
+    const char *kind;
+    char topic[GIN_PHOENIX_TOPIC_MAX + 1u];
+    size_t length;
+    enum gin_history_code hc;
+    enum gin_phoenix_code pc;
+    enum gin_session_code code = GIN_SESSION_ROUTE;
+    if (!v || !c || !topology || !scope || !record || *record ||
+        !history || *history || !c->settings || !c->subject || !c->own_nick ||
+        !c->source_target || !v->fields.topic || !v->fields.event ||
+        !v->source_join_ref || !*v->source_join_ref ||
+        !v->fields.payload.data || !v->fields.payload.length)
+        return GIN_SESSION_INVALID;
+    if (scope->role != GIN_RENDER_STATUS || c->query ||
+        strcmp(c->source_target, "$server") ||
+        strcmp(c->settings->local.target, "$server")) return GIN_SESSION_ROUTE;
+    hc = gin_history_scope_check(scope);
+    if (hc != GIN_HISTORY_OK)
+        return hc == GIN_HISTORY_INVALID ? GIN_SESSION_INVALID : history_code(hc);
+    if (strcmp(scope->origin, c->settings->origin) ||
+        strcmp(scope->network_slug, c->settings->local.network) ||
+        strcmp(scope->target, c->settings->local.target) ||
+        strcmp(scope->chantypes, c->settings->local.chantypes) ||
+        strcmp(scope->own_nick, c->own_nick) || scope->network_id != c->network_id ||
+        scope->socket_epoch != v->observed_epoch) return GIN_SESSION_ROUTE;
+    net = gin_topology_find_id(topology, c->network_id);
+    if (!net || strcmp(net->slug, scope->network_slug) ||
+        strcmp(net->own_nick, scope->own_nick)) return GIN_SESSION_ROUTE;
+    if (gin_ws_topic(c->subject, net->slug, "$server", topic, sizeof(topic),
+        &length) != GIN_WS_VALUE_OK || strcmp(topic, v->fields.topic) ||
+        (v->fields.join_ref && strcmp(v->fields.join_ref, v->source_join_ref)))
+        return GIN_SESSION_ROUTE;
+    o = json_loadb((const char *)v->fields.payload.data, v->fields.payload.length,
+        JSON_REJECT_DUPLICATES, &error);
+    /* This parse is not attested by either downstream decoder's DOM. */
+    if (!o || !gin_history_evidence(v->fields.payload.data,
+        v->fields.payload.length, o) || !(kind = text(o, "kind"))) goto done;
+    row = json_object_get(o, "message");
+    if (status_reserved(o) || status_reserved(row)) {
+        code = GIN_SESSION_UNSUPPORTED; goto done;
+    }
+    if (strcmp(v->fields.event, "event") || strcmp(kind, "message")) {
+        code = GIN_SESSION_OK; goto done;
+    }
+    kind = text(row, "kind");
+    if (!kind) goto done;
+    if (strcmp(kind, "server_event") && strcmp(kind, "notice") &&
+        strcmp(kind, "privmsg") && strcmp(kind, "action")) {
+        code = GIN_SESSION_OK; goto done;
+    }
+    memset(&rc, 0, sizeof(rc));
+    rc.subject = c->subject; rc.network = net->slug; rc.target = "$server";
+    rc.source_target = "$server"; rc.chantypes = scope->chantypes;
+    rc.join_ref = v->source_join_ref; rc.socket_epoch = scope->socket_epoch;
+    rc.role = GIN_RENDER_STATUS; rc.encryption = scope->encryption;
+    pc = gin_phoenix_encode(&v->fields, &encoded);
+    if (pc == GIN_PHOENIX_OK) pc = gin_phoenix_decode(encoded.data, encoded.length, &frame);
+    if (pc != GIN_PHOENIX_OK) {
+        code = pc == GIN_PHOENIX_NOMEM ? GIN_SESSION_NOMEM : GIN_SESSION_ROUTE;
+        goto done;
+    }
+    code = render_code(gin_render_event(frame, &rc, v->observed_epoch,
+        v->receive_ms, &temporary));
+    /* Presence, including null, selects strict persisted-row decoding. */
+    if (code == GIN_SESSION_OK && temporary && json_object_get(row, "id"))
+        code = history_code(gin_history_live_decode(frame, &rc, scope,
+            v->observed_epoch, &page));
+    if (code == GIN_SESSION_OK) {
+        *record = temporary; temporary = NULL;
+        *history = page; page = NULL;
+    }
+done:
+    gin_render_record_free(temporary); gin_history_page_free(page);
+    gin_phoenix_frame_free(frame); gin_phoenix_bytes_free(&encoded);
+    json_decref(o); return code;
 }

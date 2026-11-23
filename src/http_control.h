@@ -22,6 +22,10 @@ struct gin_http_result gin_http_request_controlled(const struct gin_http_request
     unsigned char *, size_t, struct gin_http_control *);
 enum gin_protocol_code gin_protocol_fetch_controlled(const struct gin_auth_settings *,
     const struct gin_protocol_policy *, struct gin_protocol_info *, struct gin_http_control *);
+/* Borrow only during this call. An aborted POST may have created a server
+ * session; cancellation neither rolls it back nor authorizes an automatic retry. */
+enum gin_auth_code gin_auth_login_controlled(const struct gin_auth_settings *,
+    const char *, const char *, struct gin_credential *, struct gin_http_control *);
 enum gin_auth_code gin_auth_identity_controlled(const struct gin_auth_settings *,
     const struct gin_credential *, struct gin_credential *, struct gin_http_control *);
 enum gin_topology_code gin_topology_fetch_controlled(const struct gin_auth_settings *,

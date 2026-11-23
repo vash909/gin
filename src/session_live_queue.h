@@ -7,6 +7,9 @@
 #define GIN_LIVE_ROWS_MAX 64u
 #define GIN_LIVE_BYTES_MAX 2097152u
 #define GIN_LIVE_SOURCES_MAX 4u
+/* Private account capacity ceiling; must match the trusted owner's actual
+ * Native topic plan ceiling. This is capacity, not authentication. */
+#define GIN_LIVE_ACCOUNT_SOURCES_MAX 64u
 
 enum gin_live_code {
     GIN_LIVE_OK, GIN_LIVE_INVALID, GIN_LIVE_LIMIT, GIN_LIVE_NOMEM,
@@ -18,7 +21,10 @@ enum gin_live_kind {
     GIN_LIVE_UNSUPPORTED, GIN_LIVE_MALFORMED
 };
 /* Input strings/views are borrowed for push only. Source index addresses the
- * owner's immutable <=4-topic plan, not a payload-derived destination. Source
+ * owner's immutable plan (default <=4, explicit account opt-in <=64), never a
+ * payload-derived destination. Actual frame source identity, join_ref and epoch
+ * validation remain owner/caller preconditions; capacity authenticates nothing.
+ * Source
  * join_ref is the actual current JOINED getter snapshot (nonempty); frame
  * join_ref/ref preserve NULL versus empty. Epoch is nonzero; receive_ms is an
  * explicit owner batch wall-clock value sampled OUTSIDE the callback. */
@@ -38,7 +44,8 @@ struct gin_live_queue;
  * excluded from retained bytes. No preallocated payload-sized buffers.
  *
  * Push validates local shape BEFORE mutation: non-NULL q/view, kind in1..6,
- * source_index<4, epoch!=0, source_join_ref length1..REF_MAX; frame topic/event
+ * source_index<queue source_limit (legacy default4), epoch!=0,
+ * source_join_ref length1..REF_MAX; frame topic/event
  * length1..TOPIC/EVENT_MAX, nullable frame refs length0..REF_MAX, payload data
  * non-NULL with length1..BODY_MAX. Metadata UTF-8/JSON validity is a caller
  * precondition from the existing decoded frame, not revalidated here.
@@ -61,6 +68,10 @@ struct gin_live_queue;
  */
 enum gin_live_code gin_live_queue_new(size_t rows, size_t bytes,
     struct gin_live_queue **out);
+/* Explicit private opt-in: sources1..64, checked before allocation. Same fresh
+ * NULL out and failure/ownership contract as new; no global policy changes. */
+enum gin_live_code gin_live_queue_new_sources(size_t rows, size_t bytes,
+    size_t source_limit, struct gin_live_queue **out);
 enum gin_live_code gin_live_queue_push(struct gin_live_queue *queue,
     const struct gin_live_view *view);
 const struct gin_live_view *gin_live_queue_peek(const struct gin_live_queue *queue);

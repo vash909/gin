@@ -50,7 +50,8 @@ struct gin_render_record;
  * an occupied output. Owned records survive frame/context destruction.
  *
  * Only Phoenix event="event": outer kind="message" with nested
- * privmsg/notice/action, plus joined/window_pending/window_invited/
+ * privmsg/notice/action (also exact server_event for STATUS only), plus
+ * joined/window_pending/window_invited/
  * window_invite_declined/join_failed/kicked lifecycle. Unknown kinds IGNORE;
  * recognized kinds with bad consumed fields MALFORMED. Ignore unused id/meta
  * and additive fields; do not add wire constraints for unconsumed data.
@@ -94,6 +95,15 @@ void gin_render_record_free(struct gin_render_record *record);
  * out freshNULL, unchanged on failure/IGNORE. Owned output survives inputs. */
 enum gin_render_code gin_render_plain_message(const char *kind,
     const unsigned char *sender, size_t sender_length,
+    const unsigned char *body, size_t body_length, int64_t server_ms,
+    enum gin_render_encryption mode, struct gin_render_record **out);
+
+/* Explicit presentation-policy opt-in: same contract as the legacy helper,
+ * plus exact server_event ONLY for STATUS. Role is trusted presentation policy,
+ * not routing/authentication evidence. Unknown roles INVALID, output unchanged.
+ * The legacy helper above retains its three-kind allowlist. */
+enum gin_render_code gin_render_plain_message_role(enum gin_render_role role,
+    const char *kind, const unsigned char *sender, size_t sender_length,
     const unsigned char *body, size_t body_length, int64_t server_ms,
     enum gin_render_encryption mode, struct gin_render_record **out);
 

@@ -110,7 +110,8 @@ static enum gin_render_code project(json_t *o, const struct gin_render_context *
         row = json_object_get(o, "message");
         if (!json_is_object(row) || !(label = text(row, "kind"))) return GIN_RENDER_MALFORMED;
         if (!strncmp(label, "e2e_", 4)) return GIN_RENDER_UNSUPPORTED_ENCRYPTION;
-        if (strcmp(label, "privmsg") && strcmp(label, "notice") && strcmp(label, "action"))
+        if (strcmp(label, "privmsg") && strcmp(label, "notice") && strcmp(label, "action") &&
+            (c->role != GIN_RENDER_STATUS || strcmp(label, "server_event")))
             return GIN_RENDER_IGNORE;
     } else if (!strcmp(kind, "joined")) state = "joined";
     else if (!strcmp(kind, "window_pending")) state = "pending";
@@ -201,7 +202,8 @@ enum gin_render_code gin_render_event(const struct gin_phoenix_frame *frame,
     record->length = b.length; memcpy(record->data, b.data, b.length + 1u);
     *out = record; return GIN_RENDER_OK;
 }
-enum gin_render_code gin_render_plain_message(const char *kind,
+enum gin_render_code gin_render_plain_message_role(enum gin_render_role role,
+    const char *kind,
     const unsigned char *sender, size_t sender_length,
     const unsigned char *body, size_t body_length, int64_t server_ms,
     enum gin_render_encryption mode, struct gin_render_record **out)
@@ -210,7 +212,8 @@ enum gin_render_code gin_render_plain_message(const char *kind,
     struct gin_render_record *record;
     char time[GIN_RENDER_TIME_CAP];
     enum gin_render_code code;
-    if (!kind || !out || *out || (!sender && sender_length) ||
+    if (role < GIN_RENDER_CHANNEL || role > GIN_RENDER_STATUS ||
+        !kind || !out || *out || (!sender && sender_length) ||
         (!body && body_length) || mode < GIN_RENDER_MODE_UNKNOWN ||
         mode > GIN_RENDER_MODE_ENCRYPTED) return GIN_RENDER_INVALID;
     if (mode != GIN_RENDER_MODE_PLAIN || !strncmp(kind, "e2e_", 4))
@@ -218,7 +221,8 @@ enum gin_render_code gin_render_plain_message(const char *kind,
     if (sender_length > GIN_RENDER_SENDER_MAX || body_length > GIN_RENDER_BODY_MAX)
         return GIN_RENDER_LIMIT;
     if (e2e_body((const char *)body, body_length)) return GIN_RENDER_UNSUPPORTED_ENCRYPTION;
-    if (strcmp(kind, "privmsg") && strcmp(kind, "notice") && strcmp(kind, "action"))
+    if (strcmp(kind, "privmsg") && strcmp(kind, "notice") && strcmp(kind, "action") &&
+        (role != GIN_RENDER_STATUS || strcmp(kind, "server_event")))
         return GIN_RENDER_IGNORE;
     if (gin_render_time(server_ms, time) != GIN_RENDER_VALUE_OK) return GIN_RENDER_RANGE;
     if (!strcmp(kind, "action") && body_length >= 8u && !memcmp(body, "\001ACTION ", 8)) {
@@ -239,6 +243,14 @@ enum gin_render_code gin_render_plain_message(const char *kind,
     memcpy(record->data, b.data, b.length + 1u);
     *out = record;
     return GIN_RENDER_OK;
+}
+enum gin_render_code gin_render_plain_message(const char *kind,
+    const unsigned char *sender, size_t sender_length,
+    const unsigned char *body, size_t body_length, int64_t server_ms,
+    enum gin_render_encryption mode, struct gin_render_record **out)
+{
+    return gin_render_plain_message_role(GIN_RENDER_CHANNEL, kind,
+        sender, sender_length, body, body_length, server_ms, mode, out);
 }
 struct gin_phoenix_view gin_render_record_bytes(const struct gin_render_record *record)
 {

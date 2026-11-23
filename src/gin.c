@@ -3,6 +3,7 @@
 #include "gin_runtime.h"
 #include "gin_session.h"
 #include "gin_http.h"
+#include "account_cli.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -33,6 +34,7 @@ static void
 usage(void)
 {
     fputs("Usage: gin --help | --version\n"
+         "       gin SERVER USER [-d ROOT] [-a CA_FILE]\n"
          "       gin init -d ROOT -n NETWORK -c TARGET\n"
          "       gin init  [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
          "       gin check [-f FILE] [-d ROOT] [-n NETWORK] [-c TARGET] [-T CHANTYPES]\n"
@@ -347,6 +349,9 @@ main(int argc, char **argv)
         return 0;
     }
 invalid:
+    if (argc >= 3 && strcmp(argv[1], "init") != 0 &&
+        strcmp(argv[1], "check") != 0 && strcmp(argv[1], "run") != 0)
+        return gin_account_cli(argc, argv);
     if (argc == 1)
         banner();
     fputs("gin: invalid arguments; use --help\n", stderr);

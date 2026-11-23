@@ -61,7 +61,7 @@ GIN_CONNECT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --err
     python3 tests/test_connect.py
 GIN_LIVENESS_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_liveness.py
-for unit in test_session_operation test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
+for unit in test_account_receive_hot test_session_operation test_session_topology_fidelity test_session_live_queue test_session_live_queue_owned test_session_clock test_live_json_fidelity test_connect_drain test_session_config test_session_owner test_session_owner_whitebox test_history_page test_history_owned test_history_live test_history_recovery test_history_path test_history_evidence test_render_plain test_liveness_backoff test_connect_liveness test_command test_control test_connect_query test_send test_send_payload test_send_reply test_render test_render_escape test_render_time test_render_output test_connect test_connect_protocols test_connect_topic test_phoenix test_phoenix_stream test_phoenix_collect test_phoenix_refs; do
     valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
         ".build/$unit"
 done
@@ -105,6 +105,8 @@ GIN_SESSION_BINARY=.build/gin_receive_observer GIN_SESSION_PREFIX='valgrind --qu
     python3 tests/test_session_admission.py
 GIN_SESSION_BINARY=.build/gin_owner_fault GIN_SESSION_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
     python3 tests/test_session_owner_faults.py
+GIN_ACCOUNT_HOT_DRIVER=.build/account_receive_hot_wss_driver GIN_ACCOUNT_HOT_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' \
+    python3 -m unittest discover -s tests -p test_account_receive_hot_wss.py -v
 valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
     .build/test_live_json_fidelity render
 printf '%s\n' 'All local development checks passed.'
