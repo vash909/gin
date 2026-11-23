@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <termios.h>
 static volatile sig_atomic_t stopped;
 static int mode, after_auth, wiped, wipe_calls;
 static char *live_password;
@@ -59,6 +61,18 @@ static void same_mask(const sigset_t *a, const sigset_t *b)
     for (signal_number = 1; signal_number <= SIGRTMAX; signal_number++)
         assert(sigismember(a, signal_number) == sigismember(b, signal_number));
 }
+static int same_termios(const struct termios *a, const struct termios *b)
+{
+    size_t i;
+    if (a->c_iflag != b->c_iflag) return 0;
+    if (a->c_oflag != b->c_oflag) return 0;
+    if (a->c_cflag != b->c_cflag) return 0;
+    if (a->c_lflag != b->c_lflag) return 0;
+    if (cfgetispeed(a) != cfgetispeed(b)) return 0;
+    if (cfgetospeed(a) != cfgetospeed(b)) return 0;
+    for (i = 0; i < NCCS; i++) if (a->c_cc[i] != b->c_cc[i]) return 0;
+    return 1;
+}
 #ifdef LEGACY_COMPOSITION_BRIDGE
 /* Working private baseline, not a historical public frontend claim. */
 static int bridge(const struct gin_auth_settings *s, const struct gin_protocol_policy *p,
@@ -92,6 +106,8 @@ int main(int argc, char **argv)
     sigset_t mask_before, mask_after, blocked;
     int signals[] = {SIGINT,SIGTERM,SIGHUP,SIGQUIT,SIGTSTP,SIGTTIN,SIGTTOU};
     size_t i; int ok;
+    int tty_fd;
+    struct termios tty_before = {0}, tty_after = {0};
     alarm(7);
     if (argc != 4) return 2;
     if (!strcmp(argv[1],"healthy")) mode=0;
@@ -122,6 +138,10 @@ int main(int argc, char **argv)
     s.origin=argv[2]; s.ca_file=argv[3]; s.connect_ms=1500; s.total_ms=3000;
     assert(gin_http_global_init()==GIN_HTTP_OK);
     memset(&out,0xa5,sizeof(out));
+    /* Observe restoration before the session leader can revoke its TTY. */
+    tty_fd = open("/dev/tty", O_RDONLY|O_NOCTTY|O_NONBLOCK|O_CLOEXEC);
+    assert(tty_fd >= 0);
+    assert(tcgetattr(tty_fd, &tty_before) == 0);
 #ifdef LEGACY_COMPOSITION_BRIDGE
     (void)auth_facade;
     ok=bridge(&s,&p,&c,&out);
@@ -153,6 +173,9 @@ int main(int argc, char **argv)
             for(i=0;i<sizeof(out);i++) assert(v[i]==0); }
     }
 #endif
+    assert(tcgetattr(tty_fd, &tty_after) == 0);
+    assert(same_termios(&tty_before, &tty_after));
+    assert(close(tty_fd) == 0);
     assert(sigprocmask(SIG_SETMASK, NULL, &mask_after) == 0);
     same_mask(&mask_before, &mask_after);
     for (i = 0; i < 7; i++) {

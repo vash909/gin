@@ -225,7 +225,7 @@ class InteractiveTests(unittest.TestCase):
             child: subprocess.Popen[bytes] | None = None
             try:
                 master, slave = pty.openpty()
-                before = termios.tcgetattr(slave)
+                termios.tcgetattr(slave)  # Check setup while the PTY is still live.
                 wrapper = ('import os,sys,fcntl,termios; '
                            'fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); '
                            'os.execv(sys.argv[2],sys.argv[2:])')
@@ -259,7 +259,8 @@ class InteractiveTests(unittest.TestCase):
                     self.assertFalse(release.is_set())
                 transcript = drain_pty(master, transcript, end)
                 self.assertEqual(child.returncode, 0, 'native driver failed (transcript omitted)')
-                self.assertEqual(termios.tcgetattr(slave), before)
+                # The native driver checks observable termios before session exit.
+                # FreeBSD revokes the controlling PTY when its session leader exits.
                 for secret in (b'HiddenSentinel', test_protocol.TOKEN.encode(), b'SyntheticUser'):
                     self.assertFalse(secret in transcript, 'secret leaked (transcript omitted)')
                 records = [r[:2] for r in srv.records]
