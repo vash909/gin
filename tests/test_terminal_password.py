@@ -130,6 +130,20 @@ class SupervisorTests(unittest.TestCase):
  def test_descriptor_zero_and_exact_setup_cleanup(self):
   code = """import os,pty,sys,subprocess,fcntl
 from pty_test_support import PtyProcess
+def fd_delta():
+ result={}
+ for fd in sorted(before.keys() | after.keys()):
+  if before.get(fd)==after.get(fd): continue
+  item={'before':tuple(before[fd]) if fd in before else None,
+        'after':tuple(after[fd]) if fd in after else None}
+  for name,command in (('fd_flags',fcntl.F_GETFD),('file_flags',fcntl.F_GETFL)):
+   try: item[name]=fcntl.fcntl(fd,command)
+   except OSError as exc: item[name+'_errno']=exc.errno
+  try:
+   current=os.fstat(fd); item['current']=tuple(current); item['rdev']=current.st_rdev
+  except OSError as exc: item['current_errno']=exc.errno
+  result[fd]=item
+ return result
 os.close(0)
 master,slave=pty.openpty()
 if master==0:
@@ -147,7 +161,7 @@ after={}
 for fd in range(64):
  try: after[fd]=os.fstat(fd)
  except OSError: pass
-assert before==after, 'FD identity changed'
+assert before==after, 'FD identity changed: '+repr(fd_delta())
 os.close(master); os.close(slave)
 master,slave=pty.openpty()
 if master==0:
@@ -165,7 +179,7 @@ after={}
 for fd in range(64):
  try: after[fd]=os.fstat(fd)
  except OSError: pass
-assert before==after, 'setup failure FD identity changed'
+assert before==after, 'setup failure FD identity changed: '+repr(fd_delta())
 os.close(master); os.close(slave)
 """
   result=subprocess.run([sys.executable,'-B','-c',code],cwd=os.path.dirname(__file__),capture_output=True,timeout=6)
