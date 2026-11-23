@@ -23,6 +23,56 @@ from pathlib import Path
 import test_protocol
 
 
+def drain_pty(fd: int, transcript: bytes, deadline: float,
+              cap: int = 65536) -> bytes:
+    """Drain available bytes within the owner's deadline; EOF ends readiness."""
+    assert len(transcript) <= cap, 'PTY transcript cap exceeded (omitted)'
+    while select.select([fd], [], [], .01)[0]:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('PTY drain deadline exceeded')
+        chunk = os.read(fd, 16384)
+        if not chunk:
+            break
+        assert len(transcript) + len(chunk) <= cap, 'PTY transcript cap exceeded (omitted)'
+        transcript += chunk
+    return transcript
+
+
+class PtyDrainTests(unittest.TestCase):
+    def run_child(self, body: str) -> None:
+        code = ('import os,time\nfrom test_interactive_login import drain_pty\n' + body)
+        child = subprocess.Popen([sys.executable, '-B', '-c', code],
+            cwd=Path(__file__).resolve().parent,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        try:
+            out, err = child.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.communicate()
+            self.fail('independent PTY drain process deadline')
+        self.assertEqual(child.returncode, 0, err.decode(errors='replace'))
+        self.assertEqual(out, b'')
+
+    def test_empty_eof_returns(self):
+        self.run_child('r,w=os.pipe(); os.close(w)\n'
+            'assert drain_pty(r,b"prefix",time.monotonic()+1)==b"prefix"\nos.close(r)')
+
+    def test_data_then_eof_retains_bytes(self):
+        self.run_child('r,w=os.pipe(); os.write(w,b"tail"); os.close(w)\n'
+            'assert drain_pty(r,b"prefix",time.monotonic()+1)==b"prefixtail"\nos.close(r)')
+
+    def test_expired_deadline_rejected(self):
+        self.run_child('r,w=os.pipe(); os.write(w,b"x"); os.close(w)\n'
+            'try: drain_pty(r,b"",time.monotonic()-1)\n'
+            'except TimeoutError: pass\nelse: raise AssertionError("deadline not enforced")\nos.close(r)')
+
+    def test_capture_overflow_rejected(self):
+        self.run_child('r,w=os.pipe(); os.write(w,b"x"); os.close(w)\n'
+            'try: drain_pty(r,b"",time.monotonic()+1,cap=0)\n'
+            'except AssertionError: pass\nelse: raise AssertionError("capture cap not enforced")\nos.close(r)')
+
+
 class StrictServer(http.server.HTTPServer):
     def __init__(self, certdir: Path, body: dict[str, object], auth_status: int):
         super().__init__(('127.0.0.1', 0), StrictHandler)
@@ -207,8 +257,7 @@ class InteractiveTests(unittest.TestCase):
                     self.assertLess(time.monotonic() - interrupted_at, 1.5,
                                     'held POST must stop via control, not the 3s HTTP timeout')
                     self.assertFalse(release.is_set())
-                while select.select([master], [], [], .01)[0]:
-                    transcript += os.read(master, 16384)
+                transcript = drain_pty(master, transcript, end)
                 self.assertEqual(child.returncode, 0, 'native driver failed (transcript omitted)')
                 self.assertEqual(termios.tcgetattr(slave), before)
                 for secret in (b'HiddenSentinel', test_protocol.TOKEN.encode(), b'SyntheticUser'):
