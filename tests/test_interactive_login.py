@@ -23,19 +23,7 @@ from pathlib import Path
 import test_protocol
 
 
-def drain_pty(fd: int, transcript: bytes, deadline: float,
-              cap: int = 65536) -> bytes:
-    """Drain available bytes within the owner's deadline; EOF ends readiness."""
-    assert len(transcript) <= cap, 'PTY transcript cap exceeded (omitted)'
-    while select.select([fd], [], [], .01)[0]:
-        if time.monotonic() >= deadline:
-            raise TimeoutError('PTY drain deadline exceeded')
-        chunk = os.read(fd, 16384)
-        if not chunk:
-            break
-        assert len(transcript) + len(chunk) <= cap, 'PTY transcript cap exceeded (omitted)'
-        transcript += chunk
-    return transcript
+from pty_test_support import drain_pty
 
 
 class PtyDrainTests(unittest.TestCase):

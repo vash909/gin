@@ -31,6 +31,7 @@ import test_account_cli as legacy
 import test_account_receive as wire
 import test_account_history_bootstrap as support
 from ws_fixture_frames import server_frame, take_client_frame
+from pty_test_support import PtyProcess, read_pty
 ROOT = Path(__file__).resolve().parents[1]
 def cancelled_post_eof(stream, cancelled):
     """Observe closure only after the parent reaped the cancelled client."""
@@ -68,9 +69,8 @@ class PTYTranscript:
     def drain(self):
         try:
             while True:
-                ready = select.select([self.fd], [], [], .02)[0]
-                if ready:
-                    block = os.read(self.fd, 16384)
+                block = read_pty(self.fd, .02)
+                if block is not None:
                     if not block:
                         return
                     remaining = self.LIMIT - len(self.data)
@@ -357,9 +357,8 @@ class FIFOFixture(unittest.TestCase):
             try:
                 with self.fixture(query=query, network_join=network_join, network_part=network_part, network_query=network_query) as (state, origin, late):
                     try:
-                        wrapper = 'import os,sys,fcntl,termios; fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); os.execv(sys.argv[2],sys.argv[2:])'
                         env = dict(os.environ, GIN_FIFO_STATUS_FD=str(receipt_w))
-                        proc = subprocess.Popen([sys.executable, '-B', '-c', wrapper, str(slave), binary, origin, 'SyntheticUser', '-d', str(root), '-a', str(self.certdir / 'ca.pem')], cwd=tmp, stdin=subprocess.DEVNULL, stdout=slave, stderr=slave, pass_fds=(slave,receipt_w), env=env, start_new_session=True)
+                        proc = PtyProcess([binary, origin, 'SyntheticUser', '-d', str(root), '-a', str(self.certdir / 'ca.pem')], slave, cwd=tmp, pass_fds=(receipt_w,), env=env)
                         deadline = time.monotonic() + 12
                         challenged = False
                         while time.monotonic() < deadline and proc.poll() is None:
@@ -444,10 +443,10 @@ class FIFOFixture(unittest.TestCase):
                         self.assertFalse(self.lock_available(root), 'FIFO input released the root lease')
                     finally:
                         if proc is not None:
-                            if proc.poll() is None: os.kill(proc.pid, signal.SIGTERM)
+                            if proc.poll() is None: proc.send_signal(signal.SIGTERM)
                             try: proc.wait(timeout=3)
                             except subprocess.TimeoutExpired:
-                                os.killpg(proc.pid, signal.SIGKILL); proc.wait(timeout=2); raise
+                                proc.kill(); proc.wait(timeout=2); raise
                             final=b''
                             if cancel and not network_query:
                                 self.assertTrue(select.select([receipt_r],[],[],1)[0])
@@ -564,7 +563,10 @@ class FIFOFixture(unittest.TestCase):
                     print('PASS ' + ('query' if query else 'channel') + ' FIFO literal POST exact-path/body/auth fresh-config bound-me no-local-echo')
             finally:
                 if proc is not None and proc.poll() is None:
-                    os.killpg(proc.pid, signal.SIGKILL); proc.wait(timeout=2)
+                    proc.kill(); proc.wait(timeout=2)
+                try: collector.finish()
+                finally:
+                    if proc is not None: proc.close()
 
 class FIFO(FIFOFixture):
     def test_setup_failure_ownership(self):

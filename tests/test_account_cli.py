@@ -23,6 +23,7 @@ from pathlib import Path
 import test_account_receive as wire
 import test_account_history_bootstrap as support
 from ws_fixture_frames import server_frame, take_client_frame
+from pty_test_support import PtyProcess, drain_pty
 ROOT = Path(__file__).resolve().parents[1]
 BOOT = {'networks': [{'id': 1, 'slug': 'one', 'nick': 'Own1'}, {'id': 2, 'slug': 'two', 'nick': 'Own2'}], 'channels': {'one': [{'name': '#aquiet', 'joined': True, 'source': 'joined'}, {'name': '#old1', 'joined': True, 'source': 'joined'}], 'two': [{'name': '#old2', 'joined': True, 'source': 'joined'}]}, 'heads': {}}
 QUERIES = {'kind': 'query_windows_list', 'windows': {'1': [{'network_id': 1, 'target_nick': 'Peer', 'opened_at': 'opaque'}], '2': [{'network_id': 2, 'target_nick': 'Other', 'opened_at': 'opaque'}]}}
@@ -167,22 +168,21 @@ class CLI(wire.Replan):
                 try:
                     with self.fixture() as (state, origin, _):
                         try:
-                            wrapper = 'import os,sys,fcntl,termios; fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); os.execv(sys.argv[2],sys.argv[2:])'
-                            proc = subprocess.Popen([sys.executable, '-B', '-c', wrapper, str(slave), binary, origin, 'SyntheticUser', '-d', str(Path(tmp) / 'irc'), '-a', str(self.certdir / 'ca.pem')], cwd=tmp, stdin=subprocess.DEVNULL, stdout=slave, stderr=slave, pass_fds=(slave,), start_new_session=True)
+                            proc = PtyProcess([binary, origin, 'SyntheticUser', '-d', str(Path(tmp) / 'irc'), '-a', str(self.certdir / 'ca.pem')], slave, cwd=tmp, stderr=slave)
                             end = time.monotonic() + 5
                             while time.monotonic() < end and proc.poll() is None:
                                 if select.select([master], [], [], .02)[0]: transcript += os.read(master, 16384)
                                 if b'Password: ' in transcript and not termios.tcgetattr(slave)[3] & termios.ECHO:
                                     active = True
                                     os.write(master, b'PartialPrivateSentinel')
-                                    os.kill(proc.pid, number)
+                                    proc.send_signal(number)
                                     break
                             proc.wait(timeout=3)
                         finally:
                             if proc is not None:
-                                if proc.poll() is None: os.killpg(proc.pid, signal.SIGKILL)
+                                if proc.poll() is None: proc.kill()
                                 proc.wait(timeout=2)
-                        while select.select([master], [], [], .01)[0]: transcript += os.read(master, 16384)
+                        transcript = drain_pty(master, transcript, end, cap=262144)
                         self.assertTrue(active, 'no active hidden password prompt')
                         self.assertEqual(termios.tcgetattr(slave), before)
                         self.assertEqual(state['records'], [('GET', '/api/config')])
@@ -194,6 +194,7 @@ class CLI(wire.Replan):
                         self.assertEqual(proc.returncode, 0, 'hidden prompt cancellation must be orderly')
                         print('PASS real hidden prompt cancellation signal=' + str(number) + ' exit=0 GET=config-only no-root no-auth termios-restored')
                 finally:
+                    if proc is not None: proc.close()
                     os.close(master); os.close(slave)
 
     def pinned_bytes(self, path):
@@ -293,9 +294,8 @@ finally: os.close(fd)
             expected = {n + '/' + ('' if t == '$server' else ('@' + t.lower() if t in ('Peer', 'Other') else t) + '/') + 'out': b'' if t == '#aquiet' else line(t, 10) for n, t in support.SCOPES}
             try:
                 with self.fixture() as (state, origin, _):
-                    wrapper = 'import os,sys,fcntl,termios; fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); os.execv(sys.argv[2],sys.argv[2:])'
                     root_args = [] if default_root else ['-d', str(root)]
-                    proc = subprocess.Popen([sys.executable, '-B', '-c', wrapper, str(slave), binary, origin, 'SyntheticUser', *root_args, '-a', str(self.certdir / 'ca.pem')], cwd=tmp, stdin=subprocess.DEVNULL, stdout=slave, stderr=write_fd if backpressure else slave, pass_fds=(slave,), start_new_session=True)
+                    proc = PtyProcess([binary, origin, 'SyntheticUser', *root_args, '-a', str(self.certdir / 'ca.pem')], slave, cwd=tmp, stderr=write_fd if backpressure else slave)
                     end = time.monotonic() + 12; completed = False; live = False
                     while time.monotonic() < end:
                         if select.select([master], [], [], .02)[0]: transcript += os.read(master, 16384)
@@ -330,10 +330,10 @@ finally: os.close(fd)
                             elif time.monotonic() >= challenge_end:
                                 self.assertFalse(self.lock_available(root), 'root unexpectedly released')
                                 print(('BACKPRESSURE RED' if backpressure else 'HEALTHY CONTROL FAILED') + ': root held, fresh LIVE35 not received', flush=True)
-                                os.killpg(proc.pid, signal.SIGKILL); proc.wait(timeout=2)
+                                proc.kill(); proc.wait(timeout=2)
                                 self.fail('post-checkpoint Native service blocked: no fresh LIVE35 append while root held')
                         if completed and (root / 'one/#old1/out').read_bytes() == expected['one/#old1/out'] + line('#old1', 35) + line('#old1', 40):
-                            live = True; os.kill(proc.pid, signal.SIGTERM); break
+                            live = True; proc.send_signal(signal.SIGTERM); break
                         if proc.poll() is not None: break
                     if proc.poll() is None and not live: self.fail('outer deadline before complete receive tracer')
                     proc.wait(timeout=3)
@@ -341,8 +341,8 @@ finally: os.close(fd)
                     self.assertEqual(fcntl.fcntl(write_fd, fcntl.F_GETFL), original_flags)
                     if backpressure:
                         self.assertTrue(saturated)
-                        while select.select([read_fd], [], [], 0)[0]: transcript += os.read(read_fd, 16384)
-                    while select.select([master], [], [], .01)[0]: transcript += os.read(master, 16384)
+                        transcript = drain_pty(read_fd, transcript, end, cap=262144)
+                    transcript = drain_pty(master, transcript, end, cap=262144)
                     self.assertTrue(sent, f'missing hidden prompt; actual production CLI exit={proc.returncode}')
                     self.assertEqual(proc.returncode, 0, 'production owner failed')
                     self.assertTrue(completed and live)
@@ -364,8 +364,9 @@ finally: os.close(fd)
                 print('PASS actual CLI PTY TLS loginPOST=1 GET=31 WSS=2 joins=1+12 destinations=7 lateLIVE=40 orderlySIGTERM=0 strict-ledger-clean')
             finally:
                 if proc is not None:
-                    if proc.poll() is None: os.killpg(proc.pid, signal.SIGKILL)
+                    if proc.poll() is None: proc.kill()
                     proc.wait(timeout=2)
+                if proc is not None: proc.close()
                 os.close(master); os.close(slave); os.close(read_fd); os.close(write_fd)
 
 if __name__ == '__main__': unittest.main(verbosity=2)
