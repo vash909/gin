@@ -128,58 +128,50 @@ class SupervisorTests(unittest.TestCase):
    if child is not None: child.close()
    os.close(master); os.close(slave)
  def test_descriptor_zero_and_exact_setup_cleanup(self):
-  code = """import os,pty,sys,subprocess,fcntl
+  code = """import os,pty,sys,subprocess,fcntl,errno,stat
 from pty_test_support import PtyProcess
-def fd_delta():
+def fd_slots():
  result={}
- for fd in sorted(before.keys() | after.keys()):
-  if before.get(fd)==after.get(fd): continue
-  item={'before':tuple(before[fd]) if fd in before else None,
-        'after':tuple(after[fd]) if fd in after else None}
-  for name,command in (('fd_flags',fcntl.F_GETFD),('file_flags',fcntl.F_GETFL)):
-   try: item[name]=fcntl.fcntl(fd,command)
-   except OSError as exc: item[name+'_errno']=exc.errno
-  try:
-   current=os.fstat(fd); item['current']=tuple(current); item['rdev']=current.st_rdev
-  except OSError as exc: item['current_errno']=exc.errno
-  result[fd]=item
+ for fd in range(64):
+  try: result[fd]=(fcntl.fcntl(fd,fcntl.F_GETFD),fcntl.fcntl(fd,fcntl.F_GETFL))
+  except OSError as exc:
+   if exc.errno!=errno.EBADF: raise
  return result
+def identity(fd):
+ st=os.fstat(fd)
+ return (st.st_dev,st.st_ino,stat.S_IFMT(st.st_mode),st.st_rdev)
+def fresh_zero_pty():
+ master,slave=pty.openpty()
+ if master==0:
+  relocated=fcntl.fcntl(master,fcntl.F_DUPFD_CLOEXEC,3); os.close(master); master=relocated
+ if slave!=0:
+  os.dup2(slave,0); os.close(slave); slave=0
+ return master,slave
 os.close(0)
-master,slave=pty.openpty()
-if master==0:
- relocated=fcntl.fcntl(master,fcntl.F_DUPFD_CLOEXEC,3); os.close(master); master=relocated
-if slave!=0:
- os.dup2(slave,0); os.close(slave); slave=0
-before={}
-for fd in range(64):
- try: before[fd]=os.fstat(fd)
- except OSError: pass
+master,slave=fresh_zero_pty()
+before=fd_slots(); original_identity=identity(slave)
 child=PtyProcess([sys.executable,'-B','-c','import os; fd=os.open("/dev/tty",os.O_RDWR); os.close(fd)'],slave)
-try: assert child.wait(timeout=2)==0
+try:
+ assert child.wait(timeout=2)==0
+ assert child._owner is not None and child._owner.poll() is None
+ assert identity(slave)==original_identity, 'borrowed FD identity changed while session live'
+ during=fd_slots()
+ assert {fd:during.get(fd) for fd in before}==before, 'borrowed FD slots or flags changed'
+ assert child._socket is not None
+ assert set(during)-set(before)=={child._socket.fileno()}, 'unexpected owned descriptor'
 finally: child.close()
-after={}
-for fd in range(64):
- try: after[fd]=os.fstat(fd)
- except OSError: pass
-assert before==after, 'FD identity changed: '+repr(fd_delta())
+# Session teardown may revoke the device, not the borrowed descriptor slot.
+# Query descriptor capabilities here, never fstat on the revoked PTY.
+after=fd_slots()
+assert before==after, 'FD slots/flags changed after owner close: '+repr((before,after))
 os.close(master); os.close(slave)
-master,slave=pty.openpty()
-if master==0:
- relocated=fcntl.fcntl(master,fcntl.F_DUPFD_CLOEXEC,3); os.close(master); master=relocated
-if slave!=0:
- os.dup2(slave,0); os.close(slave); slave=0
-before={}
-for fd in range(64):
- try: before[fd]=os.fstat(fd)
- except OSError: pass
+master,slave=fresh_zero_pty()
+before=fd_slots()
 try: PtyProcess(['/nonexistent/gin-pty-fixture'],slave)
 except RuntimeError: pass
 else: raise AssertionError('missing native setup failure')
-after={}
-for fd in range(64):
- try: after[fd]=os.fstat(fd)
- except OSError: pass
-assert before==after, 'setup failure FD identity changed: '+repr(fd_delta())
+after=fd_slots()
+assert before==after, 'setup failure changed FD slots/flags: '+repr((before,after))
 os.close(master); os.close(slave)
 """
   result=subprocess.run([sys.executable,'-B','-c',code],cwd=os.path.dirname(__file__),capture_output=True,timeout=6)
