@@ -74,6 +74,58 @@ INVENTORY_CASES = (
 
 
 class FreshCheckGraph(unittest.TestCase):
+    RESOURCE_ROLES = ('.build/test_credential_identity', '.build/test_account_root_hot_fault', '.build/test_account_fs_hot_fault', '.build/test_account_sinks_hot', '.build/test_account_sinks_hot_bind', '.build/test_account_sinks_hot_status', '.build/test_account_output_hot')
+
+    def test_resources_graph_exact_once(self):
+        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gin-resources-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            for entry in ("check", "check-account-components", "check-account-resources"):
+                child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"), "-n",
+                    "PYTHON=" + shlex.join([sys.executable, "-B"]), entry], cwd=work,
+                    env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                try:
+                    out, err = child.communicate(timeout=15)
+                finally:
+                    try: os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    child.wait()
+                self.assertEqual(child.returncode, 0, "resource entry missing: " + err)
+                raw = out.splitlines()
+                lines = [(i, shlex.split(s)) for i, s in enumerate(raw)
+                         if not re.fullmatch(r"--- [^\n]+ ---", s.strip())]
+                lines = [(i, w) for i, w in lines if w[:1] != ["echo"]]
+                for role in self.RESOURCE_ROLES:
+                    builds = [(i,w) for i,w in lines if "-o" in w and w[w.index("-o")+1] == role]
+                    self.assertEqual(len(builds), 1, "resource compiler exactly once: " + role)
+                    linked = [w for w in builds[0][1] if w.endswith(".c")]
+                    self.assertEqual(len(linked), len(set(linked)), "resource duplicate TU: " + role)
+                    expected = [[role]] if role != ".build/test_account_sinks_hot" else [
+                        ["HOT_FAULT=" + mode, role] for mode in ("", "missing", "mismatch", "symlink", "postpair", "taint")]
+                    calls = [(i,w) for i,w in lines if role in w and "-o" not in w]
+                    self.assertEqual(len(calls), len(expected), "resource scenarios exactly once: " + role)
+                    for (i,w), want in zip(calls, expected):
+                        self.assert_hot_command(w, want, shlex.split(raw[i+1]) if i+1<len(raw) else None)
+                        self.assertLess(builds[0][0], i)
+                self.assertFalse((work / ".build").exists())
+
+    def test_resources_all_legacy_sinks_closure(self):
+        expected = ('.build/test_account_sinks', '.build/test_account_sinks_fault', '.build/account_owner_driver', '.build/account_history_bootstrap_driver', '.build/account_history_output_driver', '.build/account_output_driver', '.build/gin', '.build/gin_cleanup_fault', '.build/gin_receive_observer', '.build/gin_owner_fault', '.build/runtime_stderr', '.build/account_cli_control_driver', '.build/gin_account_fifo_observer')
+        consumers = self.native_consumers(ROOT, ("src/account_sinks.c",))
+        self.assertTrue(set(expected).issubset(consumers))
+        for role in expected:
+            with self.subTest(role=role):
+                self.assert_project_inputs_rebuild(role)
+
+    def test_resources_recursive_inputs(self):
+        for role in self.RESOURCE_ROLES:
+            with self.subTest(role=role):
+                self.assert_project_inputs_rebuild(role)
+
     RECEIVE_HOT_ROLES = (".build/test_account_receive_hot",
                          ".build/account_receive_hot_wss_driver")
 

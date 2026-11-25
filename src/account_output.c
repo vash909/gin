@@ -1,4 +1,5 @@
-#include "account_output.h"
+#include "account_output_hot.h"
+#include "account_sinks_hot.h"
 #include "account_naming.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -22,6 +23,8 @@ struct gin_account_output {
  const struct gin_account_receive *receiver;
  const char *types;
  uint64_t epoch;
+ const struct gin_account_registry *registry;
+ int hot_failed,hot_cleanup;
  size_t count;
  struct entry entries[LIMIT];
 };
@@ -122,6 +125,91 @@ struct gin_account_output_result gin_account_output_append(struct gin_account_ou
 static int same_str(const char *a,const char *b)
 { return a && b && !strcmp(a,b); }
 static int scope_match(const struct entry *e,const struct gin_history_scope *s){if(!e||!s) return 0;if(e->scope.network_id!=s->network_id) return 0;if(e->scope.socket_epoch!=s->socket_epoch) return 0;if(e->scope.role!=s->role) return 0;if(e->scope.encryption!=GIN_RENDER_MODE_PLAIN||s->encryption!=GIN_RENDER_MODE_PLAIN) return 0;if(!same_str(e->scope.origin,s->origin)) return 0;if(!same_str(e->scope.subject_id,s->subject_id)) return 0;if(!same_str(e->scope.network_slug,s->network_slug)) return 0;if(!same_str(e->scope.target,s->target)) return 0;if(!same_str(e->scope.chantypes,s->chantypes)) return 0;if(!same_str(e->scope.own_nick,s->own_nick)) return 0;return 1;}
+static struct gin_account_output_result hot_authority(struct gin_account_output *h,
+ const struct gin_account_registry *reg,const struct gin_account_registry_scope *s,uint64_t gen)
+{
+ struct gin_account_output_result r=result();
+ struct gin_account_sinks_hot_result status;
+ const struct gin_account_identity *id;
+ size_t i;
+ if(!h || !reg || !s) return r;
+ if(h->hot_failed) { r.code=GIN_CHECKPOINT_UNSAFE;r.cleanup_failed=h->hot_cleanup;return r; }
+ for(i=0;i<h->count;i++) if(h->entries[i].failed) { r.code=GIN_CHECKPOINT_UNSAFE;return r; }
+ id=gin_account_receive_identity(h->receiver);
+ if(!id || !same_str(id->origin,s->origin) || !same_str(id->subject_id,s->subject_uuid) ||
+    !same_str(id->subject_name,s->topic_subject) || !same_str(h->types,s->chantypes) ||
+    !s->epoch || s->epoch!=h->epoch || gin_account_receive_epoch(h->receiver)!=h->epoch) {
+  r.code=GIN_CHECKPOINT_SCOPE;return r;
+ }
+ status=gin_account_sinks_hot_status(h->sinks,h->root,h->plan,reg,s,gen);
+ if(status.code!=GIN_ACCOUNT_SINKS_HOT_OK || status.cleanup_failed || status.error) {
+  if(status.code==GIN_ACCOUNT_SINKS_HOT_FAILED || status.cleanup_failed || status.error) {
+   h->hot_failed=1;h->hot_cleanup=status.cleanup_failed;
+   r.code=GIN_CHECKPOINT_UNSAFE;r.cleanup_failed=status.cleanup_failed;
+  } else if(status.code==GIN_ACCOUNT_SINKS_HOT_SCOPE) r.code=GIN_CHECKPOINT_SCOPE;
+  return r;
+ }
+ if(status.window_count!=gin_account_sinks_window_count(h->sinks) ||
+    status.window_count>gin_account_registry_window_count(reg)) return r;
+ r.code=GIN_CHECKPOINT_OK;return r;
+}
+struct gin_account_output_result gin_account_output_hot_bind(struct gin_account_output *h,
+ const struct gin_account_registry *reg,const struct gin_account_registry_scope *s,uint64_t gen)
+{
+ struct gin_account_output_result r=result();size_t nc,wc;
+ if(!h || h->registry || gen!=0) return r;
+ r=hot_authority(h,reg,s,gen);if(r.code!=GIN_CHECKPOINT_OK) return r;
+ nc=gin_account_plan_network_count(h->plan);wc=gin_account_plan_window_count(h->plan);
+ if(nc!=gin_account_registry_network_count(reg) || wc!=gin_account_registry_window_count(reg) ||
+    nc+wc!=h->count || wc!=gin_account_sinks_window_count(h->sinks)) return result();
+ /* Status attests the same sinks' exact cold root/plan/registry binding; its
+  * generation-zero constructor validated the network/window/source layout. */
+ h->registry=reg;return r;
+}
+struct gin_account_output_result gin_account_output_hot_append(struct gin_account_output *h,
+ const struct gin_account_registry_scope *s,uint64_t gen,size_t index)
+{
+ struct gin_account_output_result r=result();struct entry staged;
+ const struct gin_topology_window *w;const struct gin_topology_network *net;
+ const struct gin_account_registry_scope *rs;
+ struct gin_account_root_check_result check;size_t nc,wc,i;
+ if(!h || !h->registry) return r;
+ r=hot_authority(h,h->registry,s,gen);if(r.code!=GIN_CHECKPOINT_OK) return r;
+ nc=gin_account_registry_network_count(h->registry);
+ if(h->count<nc) return result();
+ wc=h->count-nc;
+ if(index>wc || index>=gin_account_registry_window_count(h->registry) ||
+    index>=gin_account_sinks_window_count(h->sinks)) return result();
+ if(index<wc) return r;
+ if(h->count==LIMIT) return result();
+ w=gin_account_registry_window_at(h->registry,index);
+ if(!w || w->role!=GIN_REMOTE_QUERY || w->joined || w->source!=GIN_CHANNEL_NONE || !w->opened_at) return result();
+ for(i=0;i<nc;i++) {
+  net=gin_account_registry_network_at(h->registry,i);
+  if(net && net->id==w->network_id && same_str(net->slug,w->name.input_network_slug)) break;
+ }
+ if(i==nc) return result();
+ rs=gin_account_registry_scope(h->registry);net=gin_account_registry_network_at(h->registry,i);
+ memset(&staged,0,sizeof(staged));staged.network=i;staged.window=index;
+ staged.fd=gin_account_sinks_window_output(h->sinks,index);
+ staged.scope.origin=rs->origin;staged.scope.subject_id=rs->subject_uuid;
+ staged.scope.network_slug=net->slug;staged.scope.network_id=net->id;
+ staged.scope.target=w->name.original_wire_target;staged.scope.own_nick=net->own_nick;
+ staged.scope.chantypes=rs->chantypes;staged.scope.socket_epoch=h->epoch;
+ staged.scope.role=GIN_RENDER_QUERY;staged.scope.encryption=GIN_RENDER_MODE_PLAIN;
+ check=gin_account_root_check(h->root,rs->origin,rs->subject_uuid,rs->chantypes);
+ if(check.code!=GIN_ACCOUNT_ROOT_OK || check.cleanup_failed) {
+  r.code=GIN_CHECKPOINT_UNSAFE;r.cleanup_failed=check.cleanup_failed;goto fail;
+ }
+ r.code=gin_checkpoint_open_named(h->root,&staged.scope,staged.fd,
+     &staged.checkpoint,&staged.progress,gin_account_name_prepare);
+ if(r.code!=GIN_CHECKPOINT_OK && r.code!=GIN_CHECKPOINT_UNKNOWN) goto fail;
+ if(fstat(staged.fd,&staged.expected)) { r.code=GIN_CHECKPOINT_IO;goto fail; }
+ h->entries[h->count]=staged;++h->count;r.code=GIN_CHECKPOINT_OK;return r;
+fail:
+ if(staged.checkpoint && gin_checkpoint_close(&staged.checkpoint)) r.cleanup_failed=1;
+ h->hot_failed=1;h->hot_cleanup=r.cleanup_failed;return r;
+}
 static enum gin_history_code map_render(enum gin_render_code c){switch(c){case GIN_RENDER_INVALID:return GIN_HISTORY_INVALID;case GIN_RENDER_MALFORMED:return GIN_HISTORY_MALFORMED;case GIN_RENDER_LIMIT:return GIN_HISTORY_LIMIT;case GIN_RENDER_NOMEM:return GIN_HISTORY_NOMEM;case GIN_RENDER_RANGE:return GIN_HISTORY_INVALID;case GIN_RENDER_ROUTE_MISMATCH:return GIN_HISTORY_ROUTE;case GIN_RENDER_UNSUPPORTED_ENCRYPTION:return GIN_HISTORY_UNSUPPORTED;default:return GIN_HISTORY_MALFORMED;}}
 struct gin_account_history_output_result gin_account_output_append_history(struct gin_account_output *h,const struct gin_account_destination *d,const struct gin_history_page *page,size_t index,int64_t anchor){struct gin_account_history_output_result res;struct entry *e;const struct gin_history_scope *sc;enum gin_render_code rc;struct gin_render_record *rec=NULL;res.history=GIN_HISTORY_INVALID;res.output=result();if(!h||!d||!page||anchor<0) return res;if(index>=gin_history_page_count(page)) return res;e=entry_for(h,d);if(!e) {res.history=GIN_HISTORY_ROUTE;return res;}
 if(d->terminal!=0){res.history=GIN_HISTORY_ROUTE;return res;}

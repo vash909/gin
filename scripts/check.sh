@@ -110,3 +110,5 @@ GIN_ACCOUNT_HOT_DRIVER=.build/account_receive_hot_wss_driver GIN_ACCOUNT_HOT_PRE
 valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all \
     .build/test_live_json_fidelity render
 printf '%s\n' 'All local development checks passed.'
+
+make CURL_CONFIG="$host_curl_config" check-account-resources-valgrind

@@ -1,4 +1,5 @@
 #include "gin_credential.h"
+#include "credential_identity.h"
 #include "json_evidence.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -63,6 +64,27 @@ origin_valid(const char *s)
     return 1;
 }
 
+int
+gin_credential_identity_origin_valid(const char *origin)
+{
+    return origin != NULL && origin_valid(origin);
+}
+
+int
+gin_credential_identity_subject_id_valid(const char *s)
+{
+    size_t i;
+    if (s == NULL || strnlen(s, 37) != 36) return 0;
+    for (i = 0; i < 36; ++i) {
+        char c = s[i];
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return 0;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                     (c >= 'A' && c <= 'F'))) return 0;
+    }
+    return 1;
+}
+
 enum gin_credential_code
 gin_credential_validate(const struct gin_credential *v)
 {
@@ -79,15 +101,8 @@ gin_credential_validate(const struct gin_credential *v)
         if (padding || (!ascii_alnum(c) && strchr("-._~+/", c) == NULL))
             return GIN_CREDENTIAL_INVALID;
     }
-    if (strnlen(v->subject_id, sizeof(v->subject_id)) != 36)
+    if (!gin_credential_identity_subject_id_valid(v->subject_id))
         return GIN_CREDENTIAL_INVALID;
-    for (i = 0; i < 36; ++i) {
-        char c = v->subject_id[i];
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (c != '-') return GIN_CREDENTIAL_INVALID;
-        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
-                     (c >= 'A' && c <= 'F'))) return GIN_CREDENTIAL_INVALID;
-    }
     n = strnlen(v->subject_name, sizeof(v->subject_name));
     if (n == 0 || n == sizeof(v->subject_name)) return GIN_CREDENTIAL_INVALID;
     for (i = 0; i < n; ++i) {

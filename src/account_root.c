@@ -1,4 +1,5 @@
 #include "account_root.h"
+#include "credential_identity.h"
 #include "gin_naming.h"
 #include <dirent.h>
 #include <errno.h>
@@ -65,12 +66,13 @@ static enum gin_account_root_code empty_root(const struct gin_root *r)
 /* Version 1 account-layout record: eight fixed magic/version octets, then
  * three uint16 big-endian byte lengths followed by exact non-NUL field bytes.
  * The version identifies this first account layout as well as the encoding. */
-static size_t record(unsigned char *out, const struct gin_credential *c, const char *types)
+static size_t record(unsigned char *out, const char *origin,
+    const char *subject_id, const char *types)
 {
     static const unsigned char magic[8] = { 'G', 'I', 'N', 'A', 'C', 'C', 0, 1 };
     const char *fields[3];
     size_t used = sizeof(magic), i;
-    fields[0] = c->origin; fields[1] = c->subject_id; fields[2] = types;
+    fields[0] = origin; fields[1] = subject_id; fields[2] = types;
     memcpy(out, magic, sizeof(magic));
     for (i = 0; i < 3; ++i) {
         size_t n = strlen(fields[i]);
@@ -81,6 +83,72 @@ static size_t record(unsigned char *out, const struct gin_credential *c, const c
     }
     return used;
 }
+struct gin_account_root_check_result gin_account_root_check(const struct gin_root *r,
+    const char *origin, const char *subject_uuid, const char *types)
+{
+    struct gin_account_root_check_result result = { GIN_ACCOUNT_ROOT_INVALID, false };
+    struct stat lock, before, opened, after;
+    unsigned char expected[GIN_ACCOUNT_ROOT_MAX], actual[GIN_ACCOUNT_ROOT_MAX + 1];
+    size_t n, used = 0;
+    unsigned int attempts = 0;
+    int fd;
+    if (!gin_credential_identity_origin_valid(origin) ||
+        !gin_credential_identity_subject_id_valid(subject_uuid) ||
+        types == NULL || gin_chantypes_validate(types) != 0) return result;
+    n = record(expected, origin, subject_uuid, types);
+    if (n == 0) return result;
+    result.code = held(r, &lock);
+    if (result.code != GIN_ACCOUNT_ROOT_OK) return result;
+    result.code = entry(r, &lock, &before);
+    if (result.code != GIN_ACCOUNT_ROOT_OK) return result;
+    if (before.st_size < 0 || before.st_size > GIN_ACCOUNT_ROOT_MAX) {
+        result.code = GIN_ACCOUNT_ROOT_MISMATCH; return result;
+    }
+    fd = openat(r->rootfd, GIN_ACCOUNT_ROOT_FILENAME,
+        O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    result.code = GIN_ACCOUNT_ROOT_IO;
+    if (fd < 0) return result;
+    /* Close authority requires positive evidence that this is not the borrowed
+     * lock inode: any same-inode close would release its POSIX process lock.
+     * This stateless API cannot safely reclaim an unproven/alias descriptor. */
+    if (fstat(fd, &opened) != 0) {
+        result.cleanup_failed = true;
+        return result;
+    }
+    result.code = GIN_ACCOUNT_ROOT_UNSAFE;
+    if (same(&opened, &lock)) {
+        result.cleanup_failed = true;
+        return result;
+    }
+    if (!private_file(&opened) || !same(&before, &opened)) goto done;
+    result.code = entry(r, &lock, &after);
+    if (result.code != GIN_ACCOUNT_ROOT_OK) goto done;
+    if (!same(&opened, &after)) { result.code = GIN_ACCOUNT_ROOT_UNSAFE; goto done; }
+    result.code = GIN_ACCOUNT_ROOT_IO;
+    while (used < sizeof(actual) && attempts++ < GIN_ACCOUNT_ROOT_MAX + 128) {
+        ssize_t got = read(fd, actual + used, sizeof(actual) - used);
+        if (got < 0) { if (errno == EINTR) continue; goto done; }
+        if (got == 0) break;
+        used += (size_t)got;
+    }
+    if (attempts >= GIN_ACCOUNT_ROOT_MAX + 128) goto done;
+    result.code = entry(r, &lock, &after);
+    if (result.code != GIN_ACCOUNT_ROOT_OK) goto done;
+    if (fstat(fd, &opened) != 0) { result.code = GIN_ACCOUNT_ROOT_IO; goto done; }
+    if (!same(&before, &after) || !same(&before, &opened) || !private_file(&opened)) {
+        result.code = GIN_ACCOUNT_ROOT_UNSAFE; goto done;
+    }
+    result.code = held(r, &lock);
+    if (result.code != GIN_ACCOUNT_ROOT_OK) goto done;
+    result.code = used == n && memcmp(actual, expected, n) == 0 ?
+        GIN_ACCOUNT_ROOT_OK : GIN_ACCOUNT_ROOT_MISMATCH;
+done:
+    /* POSIX close failure does not prove that the descriptor remains open.
+     * Preserve primary status and never risk closing a reused descriptor. */
+    result.cleanup_failed = close(fd) != 0;
+    return result;
+}
+
 struct gin_account_root_result gin_account_root_bind(const struct gin_root *r,
     const struct gin_credential *c, const char *types)
 {
@@ -97,7 +165,7 @@ struct gin_account_root_result gin_account_root_bind(const struct gin_root *r,
     result.code = GIN_ACCOUNT_ROOT_INVALID;
     if (types == NULL || gin_credential_validate(c) != GIN_CREDENTIAL_OK ||
         gin_chantypes_validate(types) != 0) return result;
-    n = record(expected, c, types);
+    n = record(expected, c->origin, c->subject_id, types);
     if (n == 0) return result;
     if (fstatat(r->rootfd, GIN_ACCOUNT_ROOT_FILENAME, &before, AT_SYMLINK_NOFOLLOW) == 0) {
         result.code = GIN_ACCOUNT_ROOT_UNSAFE;

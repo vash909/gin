@@ -16,12 +16,7 @@
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"FAIL %d: %s errno=%d\n",__LINE__,#x,errno); exit(1); } } while (0)
 static const char boot[] = "{\"networks\":[{\"id\":1,\"slug\":\"one\",\"nick\":\"Self\"},{\"id\":2,\"slug\":\"two\",\"nick\":\"Other\"}],\"channels\":{\"one\":[{\"name\":\"#in\",\"joined\":true,\"source\":\"joined\"},{\"name\":\"#out\",\"joined\":true,\"source\":\"joined\"}],\"two\":[]},\"heads\":{}}";
 static const char queries[] = "{\"kind\":\"query_windows_list\",\"windows\":{\"2\":[{\"network_id\":2,\"target_nick\":\"Peer\",\"opened_at\":\"x\"}]}}";
-static void lease(const char *path, int held)
-{
- pid_t p=fork(); int status; CHECK(p>=0);
- if (!p) { char file[4200]; struct flock l; int fd,rc; alarm(3); CHECK(snprintf(file,sizeof(file),"%s/.gin.lock",path)>0); fd=open(file,O_RDWR|O_NOFOLLOW); CHECK(fd>=0); memset(&l,0,sizeof(l)); l.l_type=F_WRLCK; l.l_whence=SEEK_SET; rc=fcntl(fd,F_SETLK,&l); _exit(held ? !(rc<0&&(errno==EACCES||errno==EAGAIN)) : rc!=0); }
- CHECK(waitpid(p,&status,0)==p && WIFEXITED(status) && WEXITSTATUS(status)==0);
-}
+#include "sinks_exec_probe.h"
 static void tree(int fd, size_t *dirs, size_t *files, size_t *fifos)
 {
  DIR *d=fdopendir(dup(fd)); struct dirent *e; CHECK(d);
@@ -34,8 +29,12 @@ static void tree(int fd, size_t *dirs, size_t *files, size_t *fifos)
 static int fdcount(void) { int i,n=0; for(i=0;i<512;i++) if(fcntl(i,F_GETFD)>=0) n++; return n; }
 static void flags(int in,int out) { CHECK(in>=0&&out>=0); CHECK(fcntl(in,F_GETFL)&O_NONBLOCK); CHECK(fcntl(out,F_GETFL)&O_APPEND); CHECK(fcntl(in,F_GETFD)&FD_CLOEXEC); CHECK(fcntl(out,F_GETFD)&FD_CLOEXEC); }
 #endif
-int main(void)
+int main(int argc, char **argv)
 {
+ int probe = sinks_probe_dispatch(argc, argv);
+ if (probe >= 0) return probe;
+ if (argc != 1) return 2;
+ sinks_test_executable = argv[0];
  struct gin_topology *b=NULL,*t=NULL; struct gin_account_plan *p=NULL;
  struct gin_credential c={"https://fixture.invalid","SyntheticBearer","12345678-1234-1234-1234-123456789abc","SyntheticName"};
  struct gin_root r=GIN_ROOT_INITIALIZER; char path[4096]; const char *tmp=getenv("TMPDIR"); size_t dirs=0,files=0,fifos=0; struct stat st;

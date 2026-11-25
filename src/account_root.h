@@ -15,6 +15,26 @@ struct gin_account_root_result {
     enum gin_account_root_code code;
     bool created;
 };
+struct gin_account_root_check_result {
+    enum gin_account_root_code code;
+    bool cleanup_failed;
+};
+/* Existing-only exact identity/layout check through one borrowed live root.
+ * Missing metadata is IO; corrupt/different bytes are MISMATCH. Never creates,
+ * enumerates or repairs. Trusted ancestors/cooperating same UID required;
+ * pathname races can open a lock alias. No authentication claim.
+ * Initial fstat must prove the opened inode differs from the borrowed lock
+ * before close is authorized. An alias returns UNSAFE; failed initial fstat
+ * returns IO. Both retain the descriptor without close and set cleanup_failed.
+ * This stateless ABI provides no recovery handle: explicit quarantine may retain
+ * an FD until process exit; reclamation is not promised. Otherwise close is
+ * attempted exactly once, its failure independently sets cleanup_failed, and
+ * primary code is preserved. Never retry close or a cleanup-tainted check.
+ * Owner must reject either failure, stop admission on cleanup taint, tear down
+ * all borrowers before releasing the root, and not retry the operation. */
+struct gin_account_root_check_result gin_account_root_check(
+    const struct gin_root *root, const char *origin,
+    const char *subject_uuid, const char *chantypes);
 /* Private identity/layout binding, NOT authentication. Borrow exactly one live
  * process-owned root lease; never copy/reacquire it or open its lock aliases.
  * Inputs are native bounded credentials and NUL-terminated chantypes. No

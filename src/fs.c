@@ -544,3 +544,167 @@ gin_init(const char *path, const char *network, const char *target,
     errno = saved;
     return result;
 }
+
+/* Checked helpers deliberately do not use legacy helpers with silent closes. */
+static int
+pair_same(const struct stat *a, const struct stat *b)
+{
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino;
+}
+
+static int
+pair_dir_stat(const struct stat *s)
+{
+    if (!S_ISDIR(s->st_mode) || (s->st_mode & 07777) != 0700 ||
+        s->st_uid != geteuid()) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+static void
+pair_close(int *fd, struct gin_fs_pair_result *r)
+{
+    if (*fd >= 0 && close(*fd) == -1) {
+        int saved = errno;
+        r->cleanup_failed = 1;
+        if (!r->error) r->error = saved;
+    }
+    *fd = -1;
+}
+
+static int
+pair_dir_guard(int parent, const char *name, int fd)
+{
+    struct stat opened, path;
+    if (fstat(fd, &opened) == -1 || pair_dir_stat(&opened) == -1 ||
+        fstatat(parent, name, &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        pair_dir_stat(&path) == -1) return -1;
+    if (!pair_same(&opened, &path)) { errno = EPERM; return -1; }
+    return 0;
+}
+
+static int
+pair_dir_open(int parent, const char *name, int *fd)
+{
+    struct stat before, opened;
+    if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+        pair_dir_stat(&before) == -1) return -1;
+    *fd = openat(parent, name,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (*fd < 0) return -1;
+    if (fstat(*fd, &opened) == -1) return -1;
+    if (!pair_same(&before, &opened)) { errno = EPERM; return -1; }
+    return pair_dir_guard(parent, name, *fd);
+}
+
+static int
+pair_endpoint_guard(int parent, const char *name, int fd, int fifo)
+{
+    struct stat opened, after;
+    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, fifo) == -1 ||
+        fstatat(parent, name, &after, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&after, fifo) == -1) return -1;
+    if (!pair_same(&opened, &after)) { errno = EPERM; return -1; }
+    return 0;
+}
+
+static int
+pair_endpoint(int parent, const char *name, int fifo, const struct stat *lock,
+              int *fd, struct gin_fs_pair_result *r)
+{
+    struct stat before, opened;
+    int exists, flags = (fifo ? O_RDONLY : O_WRONLY | O_APPEND) |
+        O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+    exists = fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == 0;
+    if (!exists && errno != ENOENT) return -1;
+    if (exists && check_endpoint(&before, fifo) == -1) return -1;
+    if (!exists) {
+        r->mutation_attempted = 1;
+        if (fifo) {
+            if (mkfifoat(parent, name, 0600) == -1) return -1;
+            if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+                check_endpoint(&before, fifo) == -1) return -1;
+        } else flags |= O_CREAT | O_EXCL;
+    }
+    *fd = openat(parent, name, flags, 0600);
+    if (*fd < 0) return -1;
+    /* No close authority until the first fstat proves non-alias identity.
+     * Retain even an unproven non-alias: closing might drop the process lease. */
+    if (fstat(*fd, &opened) == -1) {
+        r->cleanup_failed = 1;
+        *fd = -1;
+        return -1;
+    }
+    if (pair_same(&opened, lock)) {
+        r->cleanup_failed = 1;
+        *fd = -1;
+        errno = EPERM;
+        return -1;
+    }
+    if (check_endpoint(&opened, fifo) == -1) return -1;
+    if ((exists || fifo) && !pair_same(&before, &opened)) {
+        errno = EPERM;
+        return -1;
+    }
+    return pair_endpoint_guard(parent, name, *fd, fifo);
+}
+
+struct gin_fs_pair_result
+gin_root_pair_prepare_named(const struct gin_root *root, const char *network,
+    const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare,
+    struct gin_fs_pair *out)
+{
+    struct gin_fs_pair_result r = { 0, 0, 0 };
+    struct gin_fs_pair pair = { -1, -1 };
+    struct gin_name name;
+    struct stat lock, path;
+    int net = -1, win = -1;
+    mode_t mask;
+    if (!root || !network || !target || !chantypes || !prepare || !out ||
+        out->input != -1 || out->output != -1 ||
+        root->rootfd < 0 || root->lockfd < 0) {
+        r.error = EINVAL;
+        errno = r.error;
+        return r;
+    }
+    if (prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1 ||
+        fstat(root->lockfd, &lock) == -1 || check_endpoint(&lock, 0) == -1 ||
+        fstatat(root->rootfd, ".gin.lock", &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&path, 0) == -1) {
+        r.error = errno;
+        return r;
+    }
+    if (!pair_same(&lock, &path)) { r.error = EPERM; errno = EPERM; return r; }
+    mask = umask(077);
+    if (pair_dir_open(root->rootfd, name.network_component, &net) == -1)
+        goto fail;
+    /* Network preflight is existing-only, before any creation attempt. */
+    r.mutation_attempted = 1;
+    if (mkdirat(net, name.window_component, 0700) == -1 && errno != EEXIST)
+        goto fail;
+    if (pair_dir_open(net, name.window_component, &win) == -1 ||
+        pair_dir_guard(root->rootfd, name.network_component, net) == -1 ||
+        pair_endpoint(win, "in", 1, &lock, &pair.input, &r) == -1 ||
+        pair_endpoint(win, "out", 0, &lock, &pair.output, &r) == -1 ||
+        pair_endpoint_guard(win, "in", pair.input, 1) == -1 ||
+        pair_endpoint_guard(win, "out", pair.output, 0) == -1 ||
+        pair_dir_guard(net, name.window_component, win) == -1 ||
+        pair_dir_guard(root->rootfd, name.network_component, net) == -1)
+        goto fail;
+    goto done;
+fail:
+    r.error = errno;
+done:
+    pair_close(&win, &r);
+    pair_close(&net, &r);
+    if (r.error || r.cleanup_failed) {
+        pair_close(&pair.input, &r);
+        pair_close(&pair.output, &r);
+    } else *out = pair;
+    (void)umask(mask);
+    if (r.error) errno = r.error;
+    return r;
+}

@@ -224,19 +224,31 @@ characterize(int zero)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
     pid_t child;
-    int status;
+    int probe = sinks_probe_dispatch(argc, argv);
+    if (probe >= 0)
+        return probe;
+    sinks_test_executable = argv[0];
+    if (argc == 2 && !strcmp(argv[1], "--sinks-fault-zero")) {
+        characterize(1);
+        return 0;
+    }
+    if (argc != 1)
+        return 2;
     alarm(40);
     characterize(0);
+    CHECK(fflush(NULL) == 0);
     child = fork();
     CHECK(child >= 0);
     if (!child) {
-        characterize(1);
-        _exit(0);
+        char *args[] = {argv[0], (char *)"--sinks-fault-zero", NULL};
+        alarm(15);
+        execvp(sinks_test_executable, args);
+        _exit(127);
     }
-    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    sinks_wait_child(child);
     puts("account-sinks fault characterization: ok");
     return 0;
 }
