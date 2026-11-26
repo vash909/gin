@@ -209,7 +209,7 @@ static const struct gin_topology_window *dispatch_window_at(const struct gin_acc
 { return d->registry?gin_account_registry_window_at(d->registry,i):gin_account_plan_window_at(d->plan,i); }
 static enum gin_session_code dispatch_next(struct gin_account_dispatch *d,
     struct gin_account_destination *destination,struct gin_render_record **record,struct gin_history_page **history,
-    struct gin_account_inventory **fresh_out)
+    struct gin_account_inventory **fresh_out,int typed)
 {
     const struct gin_live_view *v;
     const struct gin_account_identity *id;
@@ -224,7 +224,7 @@ static enum gin_session_code dispatch_next(struct gin_account_dispatch *d,
     struct gin_account_inventory *proposal=NULL;
     json_error_t error={0};json_t *o=NULL,*row;
     const char *kind,*network,*target,*peer,*source_target=NULL;
-    struct gin_name name;char topic[GIN_WS_TOPIC_CAP];size_t count,i,length;int terminal=0, lifecycle=0;
+    struct gin_name name;char topic[GIN_WS_TOPIC_CAP];size_t count,i,length;int terminal=0, lifecycle=0, message=0;
     uint64_t epoch;enum gin_session_code code=GIN_SESSION_ROUTE;
     if(!d || !destination || !record || *record || !history || *history) return GIN_SESSION_INVALID;
     if(d->failure) return d->failure;
@@ -253,6 +253,7 @@ static enum gin_session_code dispatch_next(struct gin_account_dispatch *d,
     if(!kind) goto done;
     if(reserved(o) || reserved(row)) {code=GIN_SESSION_UNSUPPORTED;goto done;}
     if(strcmp(v->fields.event,"event")) {code=GIN_SESSION_OK;goto done;}
+    message=!strcmp(kind,"message");
     if(!strcmp(kind,"query_windows_list")) {
         struct gin_account_plan *candidate=NULL;
         if(d->registry && !fresh_out) goto done;
@@ -371,6 +372,11 @@ project_selected:
     if(next) code=GIN_SESSION_ROUTE;
     selected.terminal=terminal;
 done:
+    /* Opt-in history admission: an attested outer message is never harmless
+     * metadata. Legacy projection may ignore unsupported rows or omit a page
+     * for IDless records; reject both cases before consuming the queue head. */
+    if(typed && message && code==GIN_SESSION_OK && (!temporary || !page))
+        code=GIN_SESSION_UNSUPPORTED;
     json_decref(o);gin_topology_free(next);
     if(code==GIN_SESSION_OK && gin_account_receive_drop(d->receiver)!=GIN_LIVE_OK) code=GIN_SESSION_ROUTE;
     if(code==GIN_SESSION_OK && proposal) { if(d->registry) d->pending=proposal;*fresh_out=proposal;proposal=NULL; }
@@ -381,11 +387,18 @@ done:
 }
 enum gin_session_code gin_account_dispatch_next(struct gin_account_dispatch *d,
     struct gin_account_destination *destination,struct gin_render_record **record,struct gin_history_page **history)
-{ return dispatch_next(d,destination,record,history,NULL); }
+{ return dispatch_next(d,destination,record,history,NULL,0); }
 enum gin_session_code gin_account_dispatch_next_inventory(struct gin_account_dispatch *d,
     struct gin_account_destination *destination,struct gin_render_record **record,struct gin_history_page **history,
     struct gin_account_inventory **fresh_out)
 {
     if(!fresh_out || *fresh_out) return GIN_SESSION_INVALID;
-    return dispatch_next(d,destination,record,history,fresh_out);
+    return dispatch_next(d,destination,record,history,fresh_out,0);
+}
+enum gin_session_code gin_account_dispatch_next_inventory_typed(struct gin_account_dispatch *d,
+    struct gin_account_destination *destination,struct gin_render_record **record,struct gin_history_page **history,
+    struct gin_account_inventory **fresh_out)
+{
+    if(!d || !d->registry || !fresh_out || *fresh_out) return GIN_SESSION_INVALID;
+    return dispatch_next(d,destination,record,history,fresh_out,1);
 }

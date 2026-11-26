@@ -12,7 +12,7 @@ CURL_CONFIG = curl-config
 FS_HEADERS = include/gin_fs.h src/fs_private.h include/gin_naming.h
 ACCOUNT_COMPONENT_TARGETS = .build/test_status_projection .build/test_status_projection_fidelity .build/test_status_render .build/test_connect_replan .build/connect_replan_wss_driver .build/account_discovery_driver .build/test_account_naming .build/terminal_password_driver .build/terminal_password_fault_driver .build/account_fs_driver .build/test_account_checkpoint .build/test_account_root .build/test_account_root_fault .build/auth_login_control_driver .build/interactive_login_driver .build/test_account_plan .build/test_account_plan_fault .build/test_account_live_queue .build/test_account_sinks .build/test_account_sinks_fault .build/test_account_network_checkpoint .build/account_output_driver .build/account_history_output_driver .build/test_account_receive_control
 ACCOUNT_COMPONENT_TARGETS += .build/account_receive_driver .build/account_dispatch_driver .build/test_account_dispatch_fidelity
-ACCOUNT_COMPONENT_TARGETS += .build/account_history_bootstrap_driver
+ACCOUNT_COMPONENT_TARGETS += .build/account_history_bootstrap_driver .build/account_history_one_wss_driver
 ACCOUNT_COMPONENT_TARGETS += .build/account_owner_driver
 ACCOUNT_COMPONENT_TARGETS += .build/gin .build/account_cli_control_driver .build/gin_account_fifo_observer
 ACCOUNT_COMPONENT_TARGETS += .build/test_account_registry
@@ -20,6 +20,7 @@ ACCOUNT_COMPONENT_TARGETS += .build/test_connect_hot .build/test_connect_hot_fau
 ACCOUNT_COMPONENT_TARGETS += .build/test_account_dispatch_hot .build/account_dispatch_hot_wss_driver
 ACCOUNT_COMPONENT_TARGETS += .build/test_account_receive_hot .build/account_receive_hot_wss_driver
 ACCOUNT_RESOURCE_TARGETS = .build/test_credential_identity .build/test_account_root_hot_fault .build/test_account_fs_hot_fault .build/test_account_sinks_hot .build/test_account_sinks_hot_bind .build/test_account_sinks_hot_status .build/test_account_output_hot
+ACCOUNT_RESOURCE_TARGETS += .build/test_account_output_hot_status .build/test_account_output_hot_status_plain
 ACCOUNT_COMPONENT_TARGETS += $(ACCOUNT_RESOURCE_TARGETS)
 RESOURCE_SNAPSHOT_FLAGS =
 CURL_CFLAGS = `$(CURL_CONFIG) --cflags`
@@ -233,6 +234,7 @@ check-account-dispatch-inventory: .build/account_dispatch_driver
 	GIN_ACCOUNT_DISPATCH_DRIVER=.build/account_dispatch_driver GIN_DISPATCH_CASE=inventory_encrypted $(PYTHON) tests/test_account_dispatch.py
 
 check-account-components: $(ACCOUNT_COMPONENT_TARGETS)
+	GIN_HISTORY_ONE_DRIVER=$${PWD}/.build/account_history_one_wss_driver GIN_HISTORY_ONE_ROOT=$${PWD}/.build/history-one-root-$$$$ GIN_HISTORY_ONE_RECEIPT=$${PWD}/.build/history-one-root-$$$$/receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_history_one_wss.py -v
 	.build/test_credential_identity
 	.build/test_account_root_hot_fault
 	.build/test_account_fs_hot_fault
@@ -245,6 +247,8 @@ check-account-components: $(ACCOUNT_COMPONENT_TARGETS)
 	.build/test_account_sinks_hot_bind
 	.build/test_account_sinks_hot_status
 	.build/test_account_output_hot
+	.build/test_account_output_hot_status
+	.build/test_account_output_hot_status_plain
 	.build/test_account_dispatch_hot
 	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_driver GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
 	.build/test_account_receive_hot
@@ -430,6 +434,7 @@ check-account-components: $(ACCOUNT_COMPONENT_TARGETS)
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude $(LDFLAGS) -o $@ tests/test_phoenix_refs.c src/phoenix_refs.c $(LDLIBS)
 
 check: all $(ACCOUNT_COMPONENT_TARGETS) .build/test_checkpoint_fault .build/test_checkpoint .build/gin_cleanup_fault .build/test_http_control .build/gin_receive_observer .build/gin_owner_fault $(AUTHORITY_JSON_TARGETS) .build/test_session_operation .build/test_session_topology_fidelity .build/test_session_live_queue .build/test_session_live_queue_owned .build/test_live_json_fidelity .build/test_session_clock .build/test_connect_drain .build/test_session_config .build/test_session_owner .build/test_session_owner_whitebox $(HISTORY_TARGETS) .build/test_liveness_backoff .build/test_connect_liveness .build/liveness_driver .build/test_command .build/test_control .build/control_driver .build/test_connect_query .build/query_driver .build/test_send .build/test_send_payload .build/test_send_reply .build/send_driver .build/test_render .build/test_render_escape .build/test_render_time .build/test_render_output .build/render_driver .build/connect_driver .build/test_connect .build/test_connect_protocols .build/test_connect_topic .build/test_phoenix .build/test_phoenix_stream .build/test_phoenix_collect .build/test_phoenix_refs .build/test_topology .build/test_topology_lookup .build/topology_driver .build/protocol_driver .build/test_protocol_parse .build/test_auth_bounds .build/credential_driver .build/test_credential .build/auth_driver .build/test_http_request .build/http_driver .build/test_http_bounds .build/test_naming .build/lock_holder .build/fifo_consumer .build/test_input .build/runtime_consumer .build/test_runtime_api .build/runtime_boundaries .build/runtime_stderr
+	GIN_HISTORY_ONE_DRIVER=$${PWD}/.build/account_history_one_wss_driver GIN_HISTORY_ONE_ROOT=$${PWD}/.build/history-one-root-$$$$ GIN_HISTORY_ONE_RECEIPT=$${PWD}/.build/history-one-root-$$$$/receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_history_one_wss.py -v
 	.build/test_credential_identity
 	.build/test_account_root_hot_fault
 	.build/test_account_fs_hot_fault
@@ -442,6 +447,8 @@ check: all $(ACCOUNT_COMPONENT_TARGETS) .build/test_checkpoint_fault .build/test
 	.build/test_account_sinks_hot_bind
 	.build/test_account_sinks_hot_status
 	.build/test_account_output_hot
+	.build/test_account_output_hot_status
+	.build/test_account_output_hot_status_plain
 	.build/test_account_registry
 	.build/test_account_dispatch_hot
 	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_driver GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
@@ -993,6 +1000,82 @@ check-account-receive-hot: .build/test_account_receive_hot .build/account_receiv
 .build/test_session_owner: include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_input.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/checkpoint.h src/connect_control.h src/connect_hot.h src/connect_values.h src/fs_private.h src/history_evidence.h src/history_values.h src/http_control.h src/json_evidence.h src/liveness_values.h src/render_values.h src/send_values.h src/session_live_projection.h src/session_live_queue.h src/session_operation.h src/topology_internal.h
 .build/test_session_owner_whitebox: include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_input.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/checkpoint.h src/connect_control.h src/connect_hot.h src/connect_values.h src/fs_private.h src/history_evidence.h src/history_values.h src/http_control.h src/json_evidence.h src/liveness_values.h src/render_values.h src/send_values.h src/session_live_projection.h src/session_live_queue.h src/session_operation.h src/topology_internal.h
 
+VALGRIND_HEADERS = /usr/include/valgrind/memcheck.h /usr/include/valgrind/valgrind.h
+# Pure output-status inspection replaces four production translation units.
+OUTPUT_STATUS_SUPPORT = src/phoenix.c src/account_naming.c src/account_fs.c src/account_root.c src/fs.c src/naming.c src/credential.c src/topology.c src/topology_lookup.c src/connect_topic.c src/command.c src/history_page.c src/history_evidence.c src/history_render.c src/render.c src/render_escape.c src/render_time.c src/http.c
+OUTPUT_STATUS_INPUTS = include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/account_dispatch.h src/account_fs.c src/account_fs.h src/account_naming.c src/account_naming.h src/account_output.c src/account_output.h src/account_output_hot.h src/account_plan.c src/account_plan.h src/account_receive.h src/account_registry.c src/account_registry.h src/account_root.c src/account_root.h src/account_sinks.c src/account_sinks.h src/account_sinks_hot.h src/checkpoint.c src/checkpoint.h src/command.c src/connect_topic.c src/connect_values.h src/credential.c src/credential_identity.h src/fs.c src/fs_private.h src/history_evidence.c src/history_evidence.h src/history_page.c src/history_render.c src/history_values.h src/http.c src/http_control.h src/json_evidence.h src/naming.c src/phoenix.c src/render.c src/render_escape.c src/render_time.c src/render_values.h src/session_live_projection.h src/session_live_queue.h src/topology.c src/topology_internal.h src/topology_lookup.c tests/output_status_guard.c tests/output_status_snapshot_probe.c tests/test_account_output_hot_status.c
+OUTPUT_STATUS_WRAP = -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,--wrap=read -Wl,--wrap=write -Wl,--wrap=close -Wl,--wrap=fstat -Wl,--wrap=fstatat -Wl,--wrap=lseek -Wl,--wrap=fsync -Wl,--wrap=clock_gettime -Wl,--wrap=time -Wl,--wrap=gettimeofday -Wl,--wrap=gin_account_sinks_hot_bind -Wl,--wrap=gin_account_sinks_hot_append -Wl,--wrap=gin_checkpoint_commit -Wl,--wrap=gin_checkpoint_close -Wl,--wrap=open -Wl,--wrap=openat -Wl,--wrap=fcntl
+OUTPUT_STATUS_NATIVE_OBJECTS = .build/output_status_native_plan.o .build/output_status_native_registry.o .build/output_status_native_sinks.o .build/output_status_native_checkpoint.o
+.build/output_status_native_plan.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_PLAN -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_native_registry.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_REGISTRY -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_native_sinks.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_SINKS -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_native_checkpoint.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_CHECKPOINT -c tests/output_status_snapshot_probe.c -o $@
+
+.build/test_account_output_hot_status: $(OUTPUT_STATUS_INPUTS) $(OUTPUT_STATUS_NATIVE_OBJECTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -DGIN_STATUS_GUARDS -o $@ tests/test_account_output_hot_status.c $(OUTPUT_STATUS_SUPPORT) tests/output_status_guard.c $(OUTPUT_STATUS_WRAP) $(OUTPUT_STATUS_NATIVE_OBJECTS) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+OUTPUT_STATUS_PLAIN_OBJECTS = .build/output_status_plain_plan.o .build/output_status_plain_registry.o .build/output_status_plain_sinks.o .build/output_status_plain_checkpoint.o
+.build/output_status_plain_plan.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_PROBE_PLAN -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_plain_registry.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_PROBE_REGISTRY -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_plain_sinks.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_PROBE_SINKS -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_plain_checkpoint.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_PROBE_CHECKPOINT -c tests/output_status_snapshot_probe.c -o $@
+
+.build/test_account_output_hot_status_plain: $(OUTPUT_STATUS_INPUTS) $(OUTPUT_STATUS_PLAIN_OBJECTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_account_output_hot_status.c $(OUTPUT_STATUS_SUPPORT) $(OUTPUT_STATUS_PLAIN_OBJECTS) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+OUTPUT_STATUS_VG_OBJECTS = .build/output_status_vg_plan.o .build/output_status_vg_registry.o .build/output_status_vg_sinks.o .build/output_status_vg_checkpoint.o
+.build/output_status_vg_plan.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_PLAN -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_vg_registry.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_REGISTRY -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_vg_sinks.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_SINKS -c tests/output_status_snapshot_probe.c -o $@
+
+.build/output_status_vg_checkpoint.o: $(OUTPUT_STATUS_INPUTS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_PROBE_CHECKPOINT -c tests/output_status_snapshot_probe.c -o $@
+
+.build/test_account_output_hot_status_vg: $(OUTPUT_STATUS_INPUTS) $(OUTPUT_STATUS_VG_OBJECTS) $(VALGRIND_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -DGIN_STATUS_GUARDS -DGIN_STATUS_VALGRIND -o $@ tests/test_account_output_hot_status.c $(OUTPUT_STATUS_SUPPORT) tests/output_status_guard.c $(OUTPUT_STATUS_WRAP) $(OUTPUT_STATUS_VG_OBJECTS) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.PHONY: check-account-output-status-native check-account-output-status-valgrind
+check-account-output-status-native: .build/test_account_output_hot_status .build/test_account_output_hot_status_plain
+	.build/test_account_output_hot_status
+	.build/test_account_output_hot_status_plain
+
+check-account-output-status-valgrind: .build/test_account_output_hot_status_vg
+	valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_output_hot_status_vg
+
 ACCOUNT_HOT_OUTPUT_SUPPORT = src/phoenix.c $(ACCOUNT_SINKS_SUPPORT) src/account_sinks.c src/checkpoint.c src/history_page.c src/history_evidence.c src/history_render.c $(RENDER_SOURCES) src/http.c
 
 # Isolated resource units; no account frontend runtime integration.
@@ -1038,6 +1121,8 @@ check-account-resources: $(ACCOUNT_RESOURCE_TARGETS)
 	.build/test_account_sinks_hot_bind
 	.build/test_account_sinks_hot_status
 	.build/test_account_output_hot
+	.build/test_account_output_hot_status
+	.build/test_account_output_hot_status_plain
 
 .PHONY: check-account-resources check-account-resources-valgrind
 
@@ -1049,7 +1134,7 @@ check-account-resources: $(ACCOUNT_RESOURCE_TARGETS)
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -DGIN_OUTPUT_SNAPSHOT_VG -o $@ tests/test_account_output_hot.c $(ACCOUNT_HOT_OUTPUT_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
 
-check-account-resources-valgrind: $(ACCOUNT_RESOURCE_TARGETS) .build/test_account_sinks_hot_status_vg .build/test_account_output_hot_vg
+check-account-resources-valgrind: $(ACCOUNT_RESOURCE_TARGETS) .build/test_account_sinks_hot_status_vg .build/test_account_output_hot_vg .build/test_account_output_hot_status_vg
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_credential_identity
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_root_hot_fault
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_fs_hot_fault
@@ -1062,6 +1147,7 @@ check-account-resources-valgrind: $(ACCOUNT_RESOURCE_TARGETS) .build/test_accoun
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_sinks_hot_bind
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_sinks_hot_status_vg
 	valgrind --quiet --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_output_hot_vg
+	valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_output_hot_status_vg
 
 .build/account_cli_control_driver: include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_input.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/account_cli.c src/account_cli.h src/account_discovery.c src/account_discovery.h src/account_dispatch.c src/account_dispatch.h src/account_fs.c src/account_fs.h src/account_history_bootstrap.c src/account_history_bootstrap.h src/account_naming.c src/account_naming.h src/account_output.c src/account_output.h src/account_output_hot.h src/account_owner.c src/account_owner.h src/account_plan.c src/account_plan.h src/account_receive.c src/account_receive.h src/account_receive_hot.h src/account_registry.c src/account_registry.h src/account_root.c src/account_root.h src/account_sinks.c src/account_sinks.h src/account_sinks_hot.h src/auth.c src/checkpoint.c src/checkpoint.h src/command.c src/connect.c src/connect_control.h src/connect_hot.h src/connect_protocols.c src/connect_topic.c src/connect_values.h src/control.c src/credential.c src/credential_identity.h src/fs.c src/fs_private.h src/history_evidence.c src/history_evidence.h src/history_fetch.c src/history_page.c src/history_path.c src/history_recovery.c src/history_render.c src/history_values.h src/http.c src/http_control.h src/input.c src/interactive_login.h src/json_evidence.h src/liveness_backoff.c src/liveness_values.h src/naming.c src/phoenix.c src/phoenix_refs.c src/phoenix_stream.c src/protocol.c src/protocol_parse.c src/render.c src/render_escape.c src/render_time.c src/render_values.h src/send.c src/send_payload.c src/send_reply.c src/send_values.h src/session_live_projection.c src/session_live_projection.h src/session_live_queue.c src/session_live_queue.h src/terminal_password.c src/terminal_password.h src/topology.c src/topology_fetch.c src/topology_internal.h src/topology_lookup.c tests/account_cli_control_driver.c
 
@@ -1291,7 +1377,6 @@ check-account-dispatch-hot: .build/test_account_dispatch_hot .build/account_disp
 
 
 # Dedicated instrumentation role; ordinary drivers never require Valgrind headers.
-VALGRIND_HEADERS = /usr/include/valgrind/memcheck.h /usr/include/valgrind/valgrind.h
 .build/account_dispatch_hot_wss_valgrind_driver: tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(ACCOUNT_DISPATCH_HEADERS) src/account_dispatch_hot.h src/account_receive_hot.h src/account_registry.h src/credential_identity.h $(VALGRIND_HEADERS)
 	mkdir -p .build
 	$(CC) $(CPPFLAGS) -DGIN_DISPATCH_VALGRIND -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
@@ -1330,3 +1415,18 @@ check-account-dispatch-hot-valgrind: .build/test_account_dispatch_hot .build/acc
 .build/test_account_dispatch_fidelity: src/account_dispatch_hot.h src/account_registry.h
 
 .build/test_account_dispatch_hot: src/account_dispatch_hot.h src/account_registry.h src/credential_identity.h
+
+# Opt-in new-window history component; not account frontend readiness.
+ACCOUNT_HISTORY_ONE_SOURCES = tests/account_history_one_wss_driver.c src/account_history_one.c src/account_output.c src/account_dispatch.c src/account_registry.c src/account_receive.c src/account_plan.c src/account_naming.c src/session_live_queue.c src/session_live_projection.c src/history_page.c src/history_evidence.c src/connect.c src/liveness_backoff.c src/connect_protocols.c src/connect_topic.c src/http.c src/auth.c src/credential.c src/protocol.c src/protocol_parse.c src/phoenix.c src/phoenix_stream.c src/phoenix_refs.c src/command.c src/topology.c src/topology_lookup.c src/naming.c src/render.c src/render_escape.c src/render_time.c src/account_sinks.c src/account_fs.c src/account_root.c src/checkpoint.c src/fs.c src/history_render.c src/history_recovery.c src/history_fetch.c src/history_path.c src/control.c src/send_reply.c
+ACCOUNT_HISTORY_ONE_HEADERS = include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/account_dispatch.h src/account_dispatch_hot.h src/account_fs.h src/account_history_one.h src/account_naming.h src/account_output.h src/account_output_hot.h src/account_plan.h src/account_receive.h src/account_receive_hot.h src/account_registry.h src/account_root.h src/account_sinks.h src/account_sinks_hot.h src/checkpoint.h src/connect_control.h src/connect_hot.h src/connect_values.h src/credential_identity.h src/fs_private.h src/history_evidence.h src/history_values.h src/http_control.h src/json_evidence.h src/liveness_values.h src/render_values.h src/send_values.h src/session_live_projection.h src/session_live_queue.h src/topology_internal.h
+.build/account_history_one_wss_driver: $(ACCOUNT_HISTORY_ONE_SOURCES) $(ACCOUNT_HISTORY_ONE_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ $(ACCOUNT_HISTORY_ONE_SOURCES) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+
+.PHONY: check-account-history-one
+check-account-history-one: .build/account_history_one_wss_driver
+	GIN_HISTORY_ONE_DRIVER=$${PWD}/.build/account_history_one_wss_driver GIN_HISTORY_ONE_ROOT=$${PWD}/.build/history-one-root-$$$$ GIN_HISTORY_ONE_RECEIPT=$${PWD}/.build/history-one-root-$$$$/receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_history_one_wss.py -v
+
+.PHONY: check-account-history-one-valgrind
+check-account-history-one-valgrind: .build/account_history_one_wss_driver
+	GIN_HISTORY_ONE_SETUP_PROFILE=instrumented-positive GIN_HISTORY_ONE_PREFIX="valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all --log-file=.build/history-one-valgrind-$$$$.%p.log" GIN_HISTORY_ONE_DRIVER=$${PWD}/.build/account_history_one_wss_driver GIN_HISTORY_ONE_ROOT=$${PWD}/.build/history-one-root-$$$$ GIN_HISTORY_ONE_RECEIPT=$${PWD}/.build/history-one-root-$$$$/receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_history_one_wss.py -v

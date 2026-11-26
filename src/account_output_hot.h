@@ -25,4 +25,34 @@ struct gin_account_output_result gin_account_output_hot_bind(
 struct gin_account_output_result gin_account_output_hot_append(
  struct gin_account_output *, const struct gin_account_registry_scope *,
  uint64_t, size_t);
+/* Pure metadata attestation for the exact borrowed output/root/sinks/cold-plan/
+ * receiver/registry binding. Calls are serialized; handles and C strings remain
+ * live. SIZE_MAX checks only the binding; other selectors are stable registry
+ * window indices. OK plus window_admitted reports an existing output entry,
+ * not merely a registry/sink slot. UNKNOWN checkpoints may be admitted.
+ * Counts exclude network STATUS entries. generation is the bound registry's
+ * current value (zero when unbound). Stored output/entry/sink failure or cleanup
+ * taint takes FAILED precedence; non-OK never reports window_admitted.
+ * No I/O, allocation, clock, close, checkpoint action, mutation or mutating API
+ * delegation. Preserves errno and borrowed object bytes. This is not fresh
+ * authentication, FD/lease integrity, durable safe-prefix proof, subscription,
+ * deduplication, history completion or READY. Existing append guards still apply.
+ */
+enum gin_account_output_hot_code {
+ GIN_ACCOUNT_OUTPUT_HOT_OK, GIN_ACCOUNT_OUTPUT_HOT_INVALID,
+ GIN_ACCOUNT_OUTPUT_HOT_SCOPE, GIN_ACCOUNT_OUTPUT_HOT_STALE,
+ GIN_ACCOUNT_OUTPUT_HOT_FAILED
+};
+struct gin_account_output_hot_result {
+ enum gin_account_output_hot_code code;
+ uint64_t generation;
+ size_t window_count;
+ int window_admitted;
+ int cleanup_failed;
+};
+struct gin_account_output_hot_result gin_account_output_hot_status(
+ const struct gin_account_output *, const struct gin_root *,
+ const struct gin_account_sinks *, const struct gin_account_plan *,
+ const struct gin_account_receive *, const struct gin_account_registry *,
+ const struct gin_account_registry_scope *, uint64_t, size_t);
 #endif

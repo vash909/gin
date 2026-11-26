@@ -95,6 +95,286 @@ INVENTORY_CASES = (
 
 
 class FreshCheckGraph(unittest.TestCase):
+    HISTORY_ONE_ROLE = ".build/account_history_one_wss_driver"
+
+    def history_one_expected(self, instrumented=False):
+        return (["GIN_HISTORY_ONE_SETUP_PROFILE=instrumented-positive", "GIN_HISTORY_ONE_PREFIX=valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all --log-file=.build/history-one-valgrind-$$.%p.log"] if instrumented else []) + ["GIN_HISTORY_ONE_DRIVER=${PWD}/" + self.HISTORY_ONE_ROLE,
+                "GIN_HISTORY_ONE_ROOT=${PWD}/.build/history-one-root-$$",
+                "GIN_HISTORY_ONE_RECEIPT=${PWD}/.build/history-one-root-$$/receipt.json",
+                sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests",
+                "-p", "test_account_history_one_wss.py", "-v"]
+
+    def test_history_one_exact_argv(self):
+        expected = self.history_one_expected()
+        for fields, trailer in ((expected, None), (["{", *expected, ";", "}"], None),
+                                (["{", *expected], ["}", "||", "exit", "$?"])):
+            self.assert_hot_command(fields, expected, trailer)
+        for bad in ([*expected, "-k", "quiet"], ["env", *expected],
+                    ["GIN_HISTORY_ONE_DRIVER=.build/wrong", *expected[1:]],
+                    [*expected[:3], "python3", *expected[4:]]):
+            with self.assertRaises(AssertionError):
+                self.assert_hot_command(bad, expected)
+
+    def test_history_one_suite_exact_five(self):
+        import test_account_history_one_wss as history
+        self.assertEqual(unittest.defaultTestLoader.loadTestsFromModule(history).countTestCases(), 5)
+        self.assertEqual(unittest.defaultTestLoader.getTestCaseNames(history.QuietHistory), [
+            "test_held_history_services_old_live_then_nonempty_rest",
+            "test_held_unsupported_message_cannot_drain_success",
+            "test_nonrow_metadata_remains_acceptable",
+            "test_quiet_new_query_requires_focused_history",
+            "test_unsupported_message_cannot_drain_success"])
+
+    def test_history_one_prefix_policy(self):
+        from unittest.mock import patch
+        import test_account_history_one_wss as history
+        tail = ['/private/binary', 'https://127.0.0.1:1', '/private/ca', '/private/root', 'held-unsupported']
+        for raw, prefix in ((None, []), ('', []), ('   ', []),
+                            ("'/private/recording wrapper' --tag", ['/private/recording wrapper', '--tag'])):
+            with self.subTest(raw=raw), patch.dict(os.environ, {'GIN_HISTORY_ONE_DRIVER': tail[0]}, clear=True):
+                if raw is not None:
+                    os.environ['GIN_HISTORY_ONE_PREFIX'] = raw
+                self.assertEqual(history.driver_command(*tail[1:]), prefix + tail)
+        for profile in (None, '', 'ordinary', 'instrumented-positive'):
+            for prefix in ('', '/private/recording-wrapper', 'valgrind'):
+                with patch.dict(os.environ, {'GIN_HISTORY_ONE_DRIVER': tail[0],
+                                            'GIN_HISTORY_ONE_PREFIX': prefix}, clear=True):
+                    if profile is not None:
+                        os.environ['GIN_HISTORY_ONE_SETUP_PROFILE'] = profile
+                    flags = ['--instrumented-positive-setup'] if profile == 'instrumented-positive' else []
+                    self.assertEqual(history.driver_command(*tail[1:]), shlex.split(prefix)+tail+flags)
+        for profile in ('unknown', ' instrumented-positive', 'INSTRUMENTED', '   '):
+            with patch.dict(os.environ, {'GIN_HISTORY_ONE_DRIVER': tail[0],
+                                        'GIN_HISTORY_ONE_SETUP_PROFILE': profile}, clear=True):
+                with self.assertRaises(ValueError):
+                    history.driver_command(*tail[1:])
+        with patch.dict(os.environ, {'GIN_HISTORY_ONE_PREFIX': "'malformed"}):
+            with self.assertRaises(ValueError):
+                history.driver_command(*tail[1:])
+
+    def test_history_one_canonical_strict_registration(self):
+        text = (ROOT / 'scripts/check.sh').read_text()
+        self.assertEqual(text.count('make CURL_CONFIG="$host_curl_config" check-account-history-one-valgrind'), 1)
+
+    def test_history_one_recursive_inputs(self):
+        self.assert_project_inputs_rebuild(self.HISTORY_ONE_ROLE)
+
+    def test_history_one_make_prefix_checkout_paths(self):
+        """Real Make/shell plus fixture second shlex: argv regression, not transport."""
+        import json
+        with tempfile.TemporaryDirectory(prefix="gin-prefix-", dir=graph_scratch()) as temporary:
+            base = Path(temporary)
+            recorder = base / "record.py"
+            recorder.write_text("import json, os, sys\n"
+                "sys.path.insert(0, os.environ['GIN_ARGV_TESTS'])\n"
+                "import test_account_history_one_wss as history\n"
+                "command = history.driver_command('https://127.0.0.1:1', 'ca.pem', 'root', 'quiet')\n"
+                "print(json.dumps({'argv': command, 'cwd': os.getcwd(), 'profile': os.environ.get('GIN_HISTORY_ONE_SETUP_PROFILE')}))\n")
+            for name in ("ordinary-control", "checkout with spaces", "checkout's apostrophe"):
+                work = base / name
+                work.mkdir()
+                for directory in ("src", "include", "tests"):
+                    (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+                shutil.copyfile(ROOT / "Makefile", work / "Makefile")
+                artifact = work / self.HISTORY_ONE_ROLE
+                artifact.parent.mkdir()
+                # Synthetic up-to-date prerequisite only; never executed as Native.
+                artifact.write_bytes(b"")
+                future = max(path.stat().st_mtime for directory in ("src", "include", "tests")
+                             for path in (ROOT / directory).iterdir()) + 60
+                os.utime(artifact, (future, future))
+                for strict in (False, True):
+                    with self.subTest(checkout=name, strict=strict):
+                        result = subprocess.run([MAKE, "-f", "Makefile",
+                            "PYTHON=" + shlex.join([sys.executable, "-B", str(recorder)]),
+                            "check-account-history-one" + ("-valgrind" if strict else "")],
+                            cwd=work, env=dict(os.environ, GIN_ARGV_TESTS=str(ROOT / "tests")),
+                            capture_output=True, text=True, timeout=10, check=False)
+                        self.assertEqual(result.returncode, 0, "real Make argv recorder: " + result.stderr)
+                        records = [json.loads(line) for line in result.stdout.splitlines()
+                                   if line.startswith('{"argv":')]
+                        self.assertEqual(len(records), 1, result.stdout)
+                        record = records[0]
+                        self.assertEqual(record['cwd'], str(work))
+                        tail = [str(work / self.HISTORY_ONE_ROLE),
+                                'https://127.0.0.1:1', 'ca.pem', 'root', 'quiet']
+                        argv = record['argv']
+                        if strict:
+                            self.assertEqual(argv[:6], self.OUTPUT_STATUS_VG)
+                            logs = [word for word in argv if word.startswith('--log-file=')]
+                            self.assertEqual(len(logs), 1, "exactly one --log-file argument")
+                            self.assertRegex(logs[0], r'^--log-file=\.build/history-one-valgrind-[0-9]+\.%p\.log$')
+                            self.assertEqual(argv[7:], tail + ['--instrumented-positive-setup'],
+                                             "second-shlex must preserve exact argv without wrong path tokens")
+                            self.assertEqual(record['profile'], 'instrumented-positive')
+                        else:
+                            self.assertEqual(argv, tail)
+                            self.assertIsNone(record['profile'])
+
+    def test_history_one_entry_graphs(self):
+        with tempfile.TemporaryDirectory(prefix="gin-history-one-graph-", dir=graph_scratch()) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            for entry in ("check", "check-account-components", "check-account-history-one",
+                          "check-account-receive-hot", "check-account-history-one-valgrind"):
+                with self.subTest(entry=entry):
+                    child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"),
+                        "PYTHON=" + shlex.join([sys.executable, "-B"]), "-n", entry], cwd=work,
+                        env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                    try:
+                        stdout, stderr = child.communicate(timeout=10)
+                    finally:
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        child.wait()
+                    self.assertEqual(child.returncode, 0, "history-one entry graph: " + stderr)
+                    raw = stdout.splitlines()
+                    lines = [(i, shlex.split(line)) for i, line in enumerate(raw)
+                             if not re.fullmatch(r"--- [^\n]+ ---", line.strip())
+                             and not line.startswith("echo ")]
+                    builds = [(i, fields) for i, fields in lines if "-o" in fields
+                              and fields[fields.index("-o") + 1] == self.HISTORY_ONE_ROLE]
+                    calls = [(i, fields) for i, fields in lines
+                             if "test_account_history_one_wss.py" in fields]
+                    if entry == "check-account-receive-hot":
+                        self.assertEqual(builds, [], "receiver-only scope must not build focused history")
+                        self.assertEqual(calls, [], "receiver-only scope must not run focused history")
+                        continue
+                    self.assertEqual(len(builds), 1, "focused history compiler exactly once")
+                    linked = [field for field in builds[0][1] if field.endswith(".c")]
+                    self.assertEqual(len(linked), len(set(linked)), "no duplicate translation units")
+                    for source in ("tests/account_history_one_wss_driver.c", "src/account_history_one.c",
+                                   "src/account_output.c", "src/account_dispatch.c", "src/account_receive.c",
+                                   "src/account_registry.c", "src/history_fetch.c", "src/history_recovery.c",
+                                   "src/connect.c", "src/checkpoint.c"):
+                        self.assertIn(source, linked)
+                    self.assertEqual(len(calls), 1, "focused history suite exactly once and unfiltered")
+                    i, fields = calls[0]
+                    self.assert_hot_command(fields, self.history_one_expected(entry.endswith("-valgrind")),
+                        shlex.split(raw[i + 1]) if i + 1 < len(raw) else None)
+                    self.assertLess(builds[0][0], i, "compile before full five-method suite")
+                    self.assertFalse((work / ".build").exists(), "dry graph must not execute recipes")
+
+    OUTPUT_STATUS_SELECTORS = ("PLAN", "REGISTRY", "SINKS", "CHECKPOINT")
+    OUTPUT_STATUS_ROLES = tuple(".build/test_account_output_hot_status" + suffix
+                                for suffix in ("", "_plain", "_vg"))
+    OUTPUT_STATUS_VG = ["valgrind", "--trace-children=yes", "--error-exitcode=99",
+                        "--leak-check=full", "--show-leak-kinds=all",
+                        "--errors-for-leak-kinds=all"]
+
+    def test_output_status_exact_argv(self):
+        for role in self.OUTPUT_STATUS_ROLES:
+            expected = (self.OUTPUT_STATUS_VG if role.endswith("_vg") else []) + [role]
+            self.assert_hot_command(expected, expected)
+            self.assert_hot_command(["{", *expected], expected, ["}", "||", "exit", "$?"])
+            for bad in ([*expected, "--lease-probe"], ["env", *expected],
+                        [*expected, "-k", "status"]):
+                with self.assertRaises(AssertionError):
+                    self.assert_hot_command(bad, expected)
+
+    def test_output_status_entry_graphs(self):
+        entries = (("check", (0, 1)), ("check-account-components", (0, 1)),
+                   ("check-account-resources", (0, 1)),
+                   ("check-account-resources-valgrind", (2,)),
+                   ("check-account-output-status-native", (0, 1)),
+                   ("check-account-output-status-valgrind", (2,)))
+        scratch = graph_scratch()
+        with tempfile.TemporaryDirectory(prefix="gin-output-status-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            for entry, indices in entries:
+                with self.subTest(entry=entry):
+                    result = subprocess.run([MAKE, *graph_header_override(work), "-f",
+                        str(ROOT / "Makefile"), "-n", entry], cwd=work,
+                        env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
+                        capture_output=True, text=True, timeout=15, check=False)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    raw = result.stdout.splitlines()
+                    lines = [(i, shlex.split(line)) for i, line in enumerate(raw)
+                             if not re.fullmatch(r"--- [^\n]+ ---", line.strip())
+                             and not line.startswith("echo ")]
+                    for index in indices:
+                        role = self.OUTPUT_STATUS_ROLES[index]
+                        builds = [(i, w) for i, w in lines if "-o" in w and
+                                  w[w.index("-o") + 1] == role]
+                        self.assertEqual(len(builds), 1, role)
+                        i, fields = builds[0]
+                        sources = [w for w in fields if w.endswith(".c")]
+                        self.assertEqual(len(sources), len(set(sources)))
+                        self.assertIn("tests/test_account_output_hot_status.c", sources)
+                        for name in ("account_output", "account_plan", "account_registry",
+                                     "account_sinks", "checkpoint"):
+                            self.assertNotIn("src/" + name + ".c", sources)
+                        guarded = index != 1
+                        self.assertEqual(fields.count("-DGIN_STATUS_GUARDS"), int(guarded))
+                        self.assertEqual(sources.count("tests/output_status_guard.c"), int(guarded))
+                        self.assertEqual(fields.count("-DGIN_STATUS_VALGRIND"), int(index == 2))
+                        wraps = [w for w in fields if w.startswith("-Wl,--wrap=")]
+                        expected_wraps = ["-Wl,--wrap=" + name for name in
+                            ("malloc", "calloc", "realloc", "free", "read", "write", "close",
+                             "fstat", "fstatat", "lseek", "fsync", "clock_gettime", "time",
+                             "gettimeofday", "gin_account_sinks_hot_bind",
+                             "gin_account_sinks_hot_append", "gin_checkpoint_commit",
+                             "gin_checkpoint_close", "open", "openat", "fcntl")]
+                        self.assertEqual(wraps, expected_wraps if guarded else [])
+                        objects = [w for w in fields if w.endswith(".o")]
+                        suffix = ("native", "plain", "vg")[index]
+                        self.assertEqual(objects, [".build/output_status_" + suffix + "_" +
+                            selector.lower() + ".o" for selector in self.OUTPUT_STATUS_SELECTORS])
+                        for obj, selector in zip(objects, self.OUTPUT_STATUS_SELECTORS):
+                            compiles = [(j, w) for j, w in lines if "-o" in w and
+                                        w[w.index("-o") + 1] == obj]
+                            self.assertEqual(len(compiles), 1)
+                            j, command = compiles[0]
+                            self.assertLess(j, i)
+                            self.assertEqual(command[0], fields[0])
+                            self.assertEqual([w for w in command if w.endswith(".c")],
+                                             ["tests/output_status_snapshot_probe.c"])
+                            self.assertEqual([w for w in command if w.startswith("-DGIN_STATUS_PROBE_")],
+                                             ["-DGIN_STATUS_PROBE_" + selector])
+                            self.assertNotIn("-DGIN_STATUS_VALGRIND", command)
+                        calls = [(j, w) for j, w in lines if role in w and "-o" not in w]
+                        self.assertEqual(len(calls), 1)
+                        j, command = calls[0]
+                        self.assertLess(i, j)
+                        expected = (self.OUTPUT_STATUS_VG if index == 2 else []) + [role]
+                        self.assert_hot_command(command, expected,
+                            shlex.split(raw[j+1]) if j+1 < len(raw) else None)
+            self.assertFalse((work / ".build").exists())
+
+    def test_output_status_recursive_inputs(self):
+        for role in self.OUTPUT_STATUS_ROLES:
+            with self.subTest(role=role):
+                self.assert_project_inputs_rebuild(role)
+        for profile in ("native", "plain", "vg"):
+            for selector in self.OUTPUT_STATUS_SELECTORS:
+                self.assert_project_inputs_rebuild(".build/output_status_" + profile + "_" +
+                                                   selector.lower() + ".o")
+
+    def test_output_status_no_optional_headers(self):
+        scratch = graph_scratch()
+        with tempfile.TemporaryDirectory(prefix="gin-output-no-vg-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            for role in self.OUTPUT_STATUS_ROLES[:2]:
+                result = subprocess.run([MAKE, "-f", str(ROOT / "Makefile"), "-n",
+                    "VALGRIND_HEADERS=" + str(work / "missing-optional-header"), role],
+                    cwd=work, capture_output=True, text=True, timeout=15, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("-DGIN_STATUS_VALGRIND", result.stdout)
+            control = subprocess.run([MAKE, "-f", str(ROOT / "Makefile"), "-n",
+                "VALGRIND_HEADERS=" + str(work / "missing-optional-header"),
+                self.OUTPUT_STATUS_ROLES[2]], cwd=work, capture_output=True,
+                text=True, timeout=15, check=False)
+            self.assertNotEqual(control.returncode, 0)
+            self.assertFalse((work / ".build").exists())
+
     RESOURCE_ROLES = ('.build/test_credential_identity', '.build/test_account_root_hot_fault', '.build/test_account_fs_hot_fault', '.build/test_account_sinks_hot', '.build/test_account_sinks_hot_bind', '.build/test_account_sinks_hot_status', '.build/test_account_output_hot')
 
     def test_resources_graph_exact_once(self):
@@ -1147,7 +1427,8 @@ class FreshCheckGraph(unittest.TestCase):
             # Isolate external header mtimes too; these are dependency sentinels,
             # never compiler inputs or executable instrumentation substitutes.
             extra_headers = []
-            if target == ".build/account_dispatch_hot_wss_valgrind_driver":
+            if target in (".build/account_dispatch_hot_wss_valgrind_driver",
+                          ".build/test_account_output_hot_status_vg"):
                 graph_header_override(work)
                 extra_headers = [work / "graph-sdk" / name
                                  for name in ("memcheck.h", "valgrind.h")]

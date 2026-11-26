@@ -31,4 +31,11 @@ struct gin_account_dispatch_hot_result gin_account_dispatch_hot_status(
 /* Borrow cold/adopted topology until next successful resolve or free. Pending
  * does not change this view. NULL for invalid/stale/failed or legacy binding. */
 const struct gin_topology *gin_account_dispatch_hot_topology(const struct gin_account_dispatch *);
+/* Hot-only typed history admission. Every consumed event message must yield
+ * both a supported render record and a validated typed history page. Failure
+ * retains the queue head and latches dispatcher failure; non-row metadata keeps
+ * its legacy handling. Borrowing/proposal ownership is unchanged. */
+enum gin_session_code gin_account_dispatch_next_inventory_typed(struct gin_account_dispatch *,
+ struct gin_account_destination *,struct gin_render_record **,struct gin_history_page **,
+ struct gin_account_inventory **);
 #endif

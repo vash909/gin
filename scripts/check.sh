@@ -114,3 +114,6 @@ printf '%s\n' 'All local development checks passed.'
 make CURL_CONFIG="$host_curl_config" check-account-resources-valgrind
 
 make CURL_CONFIG="$host_curl_config" check-account-dispatch-hot-valgrind
+
+# Instrument the complete focused history transport suite with strict child checks.
+make CURL_CONFIG="$host_curl_config" check-account-history-one-valgrind

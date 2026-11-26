@@ -219,3 +219,94 @@ sc=gin_history_page_scope(page);if(!scope_match(e,sc)){res.history=GIN_HISTORY_R
 rc=gin_history_render(page,index,&rec);if(rc==GIN_RENDER_IGNORE){res.history=GIN_HISTORY_IGNORE;return res;}
 if(rc!=GIN_RENDER_OK){res.history=map_render(rc);if(rec) gin_render_record_free(rec);return res;}
 res.history=GIN_HISTORY_OK;res.output=append_record(h,d,rec,anchor);gin_render_record_free(rec);return res;}
+
+struct gin_account_output_hot_result gin_account_output_hot_status(
+ const struct gin_account_output *h,const struct gin_root *root,
+ const struct gin_account_sinks *sinks,const struct gin_account_plan *plan,
+ const struct gin_account_receive *receiver,const struct gin_account_registry *reg,
+ const struct gin_account_registry_scope *scope,uint64_t generation,size_t index)
+{
+ struct gin_account_output_hot_result r={GIN_ACCOUNT_OUTPUT_HOT_INVALID,0,0,0,0};
+ struct gin_account_sinks_hot_result status;
+ const struct gin_account_identity *identity;
+ const struct gin_account_registry_scope *bound;
+ const struct gin_topology_network *network;
+ const struct gin_topology_window *window;
+ const struct entry *selected;
+ struct gin_history_scope expected;
+ size_t networks=0,windows,i;
+ int failed=0,saved_errno=errno;
+ if(!h) goto done;
+ if(h->registry) r.generation=gin_account_registry_generation(h->registry);
+ if(h->plan) networks=gin_account_plan_network_count(h->plan);
+ if(h->count<=LIMIT && h->count>=networks) r.window_count=h->count-networks;
+ r.cleanup_failed=h->hot_cleanup!=0;
+ failed=h->hot_failed || h->hot_cleanup;
+ if(h->count<=LIMIT)
+  for(i=0;i<h->count;i++) if(h->entries[i].failed) failed=1;
+ /* Observe only the actual borrowed sink's already-stored failure state. */
+ bound=h->registry?gin_account_registry_scope(h->registry):NULL;
+ status=gin_account_sinks_hot_status(h->sinks,h->root,h->plan,h->registry,
+                                    bound,r.generation);
+ if(status.code==GIN_ACCOUNT_SINKS_HOT_FAILED || status.error || status.cleanup_failed) {
+  failed=1;
+  if(status.cleanup_failed) r.cleanup_failed=1;
+ }
+ if(failed) { r.code=GIN_ACCOUNT_OUTPUT_HOT_FAILED;goto done; }
+ if(!root || !sinks || !plan || !receiver || !reg || !scope || !h->registry)
+  goto done;
+ if(h->root!=root || h->sinks!=sinks || h->plan!=plan ||
+    h->receiver!=receiver || h->registry!=reg) {
+  r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;goto done;
+ }
+ if(h->count>LIMIT || networks>h->count ||
+    networks!=gin_account_registry_network_count(reg) ||
+    networks!=gin_account_sinks_network_count(sinks)) goto done;
+ windows=gin_account_registry_window_count(reg);
+ if(r.window_count>gin_account_sinks_window_count(sinks) ||
+    gin_account_sinks_window_count(sinks)>windows) goto done;
+ status=gin_account_sinks_hot_status(sinks,root,plan,reg,scope,generation);
+ if(status.code!=GIN_ACCOUNT_SINKS_HOT_OK) {
+  if(status.code==GIN_ACCOUNT_SINKS_HOT_SCOPE) r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;
+  else if(status.code==GIN_ACCOUNT_SINKS_HOT_STALE) r.code=GIN_ACCOUNT_OUTPUT_HOT_STALE;
+  else if(status.code==GIN_ACCOUNT_SINKS_HOT_FAILED) r.code=GIN_ACCOUNT_OUTPUT_HOT_FAILED;
+  goto done;
+ }
+ identity=gin_account_receive_identity(receiver);
+ if(!identity || !same_str(identity->origin,scope->origin) ||
+    !same_str(identity->subject_id,scope->subject_uuid) ||
+    !same_str(identity->subject_name,scope->topic_subject) ||
+    !same_str(h->types,scope->chantypes) || !scope->epoch ||
+    scope->epoch!=h->epoch || gin_account_receive_epoch(receiver)!=h->epoch) {
+  r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;goto done;
+ }
+ if(generation!=r.generation) { r.code=GIN_ACCOUNT_OUTPUT_HOT_STALE;goto done; }
+ if(index!=SIZE_MAX && index>=windows) goto done;
+ r.code=GIN_ACCOUNT_OUTPUT_HOT_OK;
+ if(index==SIZE_MAX || index>=r.window_count) goto done;
+ selected=&h->entries[networks+index];
+ window=gin_account_registry_window_at(reg,index);
+ if(!window || selected->window!=index || selected->network>=networks ||
+    !selected->checkpoint || selected->fd<0 ||
+    selected->fd!=gin_account_sinks_window_output(sinks,index) ||
+    (window->role!=GIN_REMOTE_QUERY && window->role!=GIN_REMOTE_CHANNEL)) {
+  r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;goto done;
+ }
+ network=gin_account_registry_network_at(reg,selected->network);
+ if(!network || network->id!=window->network_id ||
+    !same_str(network->slug,window->name.input_network_slug)) {
+  r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;goto done;
+ }
+ memset(&expected,0,sizeof(expected));
+ expected.origin=scope->origin;expected.subject_id=scope->subject_uuid;
+ expected.network_slug=network->slug;expected.network_id=network->id;
+ expected.target=window->name.original_wire_target;expected.own_nick=network->own_nick;
+ expected.chantypes=scope->chantypes;expected.socket_epoch=h->epoch;
+ expected.role=window->role==GIN_REMOTE_QUERY?GIN_RENDER_QUERY:GIN_RENDER_CHANNEL;
+ expected.encryption=GIN_RENDER_MODE_PLAIN;
+ if(!scope_match(selected,&expected)) { r.code=GIN_ACCOUNT_OUTPUT_HOT_SCOPE;goto done; }
+ r.window_admitted=1;
+ done:
+ errno=saved_errno;
+ return r;
+}
