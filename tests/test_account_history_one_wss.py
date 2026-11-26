@@ -26,6 +26,51 @@ from ws_fixture_frames import server_frame, take_client_frame
 FOCUSED = '/networks/one/channels/Aaron/messages?limit=50&after=0'
 CONFIG = {'server': 'grappa', 'protocol_version': 36, 'min_protocol_version': 3}
 
+def decode_fd_probe(wire: bytes, fd: int, dev: int, ino: int, size: int) -> tuple[int, int, int]:
+    """Snapshot of a child FD slot, not universal open-file-description identity."""
+    assert len(wire) == 48, 'FD_PROBE malformed/truncated record'
+    fields = tuple(int.from_bytes(wire[i:i+8], 'big') for i in range(0, 48, 8))
+    assert fields[0] == 0x47494e4644503031, 'FD_PROBE bad wire magic'
+    assert fields[1] == 0, 'FD_PROBE child fstat failed (closed descriptor)'
+    assert fields[2:] == (fd, dev, ino, size), 'FD_PROBE child descriptor identity/size mismatch'
+    return fields[3], fields[4], fields[5]
+
+def observe_fd(p: subprocess.Popen, reader: int, fd: int, dev: int, ino: int,
+               size: int, deadline: float) -> tuple[int, int, int]:
+    assert p.poll() is None, 'FD_PROBE child exited'
+    os.kill(p.pid, signal.SIGUSR1)
+    with selectors.DefaultSelector() as selector:
+        selector.register(reader, selectors.EVENT_READ)
+        assert selector.select(max(0, deadline-time.monotonic())), 'FD_PROBE reply deadline'
+        # One atomic write, one record. A short reply is malformed, not a
+        # reason to wait out a deadline or stitch unrelated records together.
+        wire = os.read(reader, 49)
+    return decode_fd_probe(wire, fd, dev, ino, size)
+
+def fd_probe_guards() -> None:
+    good = b''.join(n.to_bytes(8, 'big') for n in (0x47494e4644503031, 0, 7, 8, 9, 10))
+    assert decode_fd_probe(good, 7, 8, 9, 10) == (8, 9, 10)
+    mutants = [(good[:-1], 'malformed/truncated'), (b'x'+good[1:], 'bad wire magic'),
+               (good[:8]+(9).to_bytes(8, 'big')+good[16:], 'child fstat failed'),
+               (good[:32]+(99).to_bytes(8, 'big')+good[40:], 'identity/size mismatch')]
+    for wire, expected in mutants:
+        try:
+            decode_fd_probe(wire, 7, 8, 9, 10)
+        except AssertionError as error:
+            assert expected in str(error), str(error)
+        else:
+            raise AssertionError('FD_PROBE insensitive guard: '+expected)
+
+@contextlib.contextmanager
+def fd_probe_pipe() -> Iterator[tuple[int, int]]:
+    with contextlib.ExitStack() as resources:
+        reader, writer = os.pipe()
+        resources.callback(os.close, reader)
+        resources.callback(os.close, writer)
+        os.set_blocking(reader, False)
+        os.set_blocking(writer, False)
+        yield reader, writer
+
 def driver_command(origin: str, ca: str, root: str, scenario: str) -> list[str]:
     """Closed positive TLS/connect profile, independent of arbitrary prefixes.
 
@@ -274,7 +319,8 @@ class QuietHistory(unittest.TestCase):
         self.assertFalse(root.exists())
         root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         lines = []
-        with self.fixture(held, scenario if scenario in ("unsupported", "metadata", "held-unsupported") else None) as (state, origin, gates):
+        fd_probe_guards()
+        with fd_probe_pipe() as (probe_reader, probe_writer), self.fixture(held, scenario if scenario in ("unsupported", "metadata", "held-unsupported") else None) as (state, origin, gates):
             binary = os.environ['GIN_HISTORY_ONE_DRIVER']
             command = driver_command(origin, str(test_http.HTTPTests.certdir/'ca.pem'), str(root), scenario)
             launch = {'argv': command, 'cwd': os.getcwd(),
@@ -284,8 +330,11 @@ class QuietHistory(unittest.TestCase):
                       'scenario': scenario, 'ca_sha256': hashlib.sha256((test_http.HTTPTests.certdir/'ca.pem').read_bytes()).hexdigest()}
             receipt_path.with_suffix('.launch.json').write_text(json.dumps(launch, indent=2)+'\n')
             receipt_path.with_suffix('.ca.pem').write_bytes((test_http.HTTPTests.certdir/'ca.pem').read_bytes())
+            launch['probe'] = {'writer': probe_writer, 'nonblocking': True, 'signal': 'SIGUSR1', 'wire_bytes': 48}
+            receipt_path.with_suffix('.launch.json').write_text(json.dumps(launch, indent=2)+'\n')
             p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 start_new_session=True, env=dict(os.environ))
+                                 start_new_session=True, pass_fds=(probe_writer,),
+                                 env=dict(os.environ, GIN_HISTORY_ONE_PROBE_FD=str(probe_writer)))
             initial_checkpoint = None
             try:
                 assert p.stdout is not None
@@ -340,13 +389,12 @@ class QuietHistory(unittest.TestCase):
                             self.assertIsNone(p.poll())
                             self.assertFalse(gates[4].is_set(), 'response must still be held')
                             fields = dict(item.split('=') for item in line.decode().split()[1:])
-                            pinned = os.stat(f'/proc/{p.pid}/fd/{fields["fd"]}')
-                            self.assertEqual((pinned.st_dev, pinned.st_ino, pinned.st_size),
-                                             (int(fields['dev']), int(fields['ino']), len(expected)))
+                            pinned = observe_fd(p, probe_reader, int(fields['fd']), int(fields['dev']),
+                                                int(fields['ino']), len(expected), deadline)
                             log_bytes, log_meta = self.pinned_bytes(old_log)
                             self.assertEqual(log_bytes, expected)
                             self.assertEqual((log_meta.st_dev, log_meta.st_ino, log_meta.st_size),
-                                             (pinned.st_dev, pinned.st_ino, pinned.st_size))
+                                             pinned)
                             checkpoint, _ = self.pinned_bytes(root/'one/@peer/.gin.checkpoint')
                             assert initial_checkpoint is not None
                             self.assertEqual(checkpoint[:40], initial_checkpoint[:40])
@@ -356,7 +404,7 @@ class QuietHistory(unittest.TestCase):
                             self.assertFalse(self.lock_available(root), 'root lease escaped during tracer')
                             state['held_receipt'] = {'handler_still_held': True, 'old_output_hex': expected.hex(),
                                 'checkpoint_hex': checkpoint.hex(), 'old_fd': int(fields['fd']),
-                                'dev': pinned.st_dev, 'ino': pinned.st_ino, 'size': pinned.st_size,
+                                'dev': pinned[0], 'ino': pinned[1], 'size': pinned[2],
                                 'anchor': 0, 'unknown_before': True, 'root_lease_held': True}
                             if held_negative:
                                 gates[5].set()

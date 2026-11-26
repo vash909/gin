@@ -227,6 +227,7 @@ jobs:
 
           make CURL_CONFIG="$CURL_CONFIG" check-account-resources-valgrind
           make CURL_CONFIG="$CURL_CONFIG" check-account-dispatch-hot-valgrind
+          make CURL_CONFIG="$CURL_CONFIG" check-account-history-one-valgrind
   gate:
     name: gate
     if: always()

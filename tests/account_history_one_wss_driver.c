@@ -6,6 +6,8 @@
 #include "account_output_hot.h"
 #include "account_sinks_hot.h"
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +15,26 @@
 #include <time.h>
 #include <unistd.h>
 #define R(x) do { if (!(x)) { fprintf(stderr,"SETUP line %d: %s errno=%d\n",__LINE__,#x,errno); exit(2); } } while(0)
+/* Private one-shot observation of the actual child descriptor slot while HTTP
+ * is held. No pathname reopen or OFD-identity claim. Only fstat/write (POSIX
+ * async-signal-safe) run in the handler; both pipe ends are nonblocking, and
+ * this fixed 48-byte record is below POSIX's minimum PIPE_BUF. SIGUSR1 masks
+ * itself. Preserve errno, use no stdio/allocation/curl, never retry a write. */
+static volatile sig_atomic_t probe_output=-1,probe_target=-1;
+static void probe_stat(int signo)
+{
+ int saved=errno,rc; struct stat st; unsigned char wire[48];
+ uint64_t values[6]; size_t i,j; ssize_t sent;
+ (void)signo;
+ values[0]=0x47494e4644503031ULL; values[2]=(uint64_t)probe_target;
+ rc=fstat((int)probe_target,&st); values[1]=rc==0?0u:(uint64_t)errno;
+ values[3]=rc==0?(uint64_t)st.st_dev:0u;
+ values[4]=rc==0?(uint64_t)st.st_ino:0u;
+ values[5]=rc==0?(uint64_t)st.st_size:0u;
+ for(i=0;i<6;i++) for(j=0;j<8;j++) wire[i*8+j]=(unsigned char)(values[i]>>(56-8*j));
+ sent=write((int)probe_output,wire,sizeof(wire)); (void)sent;
+ errno=saved;
+}
 static void service(struct gin_account_receive *a)
 { R(!gin_account_receive_peek(a)); R(gin_account_receive_service(a,20,123)==GIN_CONNECT_OK); }
 static void waithead(struct gin_account_receive *a)
@@ -75,6 +97,17 @@ int main(int argc,char **argv)
   * HTTP total, JOIN, recovery/held/negative and parent bounds stay unchanged. */
  int instrumented=argc==6 && !strcmp(argv[5],"--instrumented-positive-setup");
  enum gin_connect_code start_code;
+ struct sigaction probe_action,previous_probe_action;
+ const char *probe_text=getenv("GIN_HISTORY_ONE_PROBE_FD"); char *probe_end;
+ long probe_number; struct stat probe_meta; int probe_flags;
+ R(probe_text && *probe_text); errno=0; probe_number=strtol(probe_text,&probe_end,10);
+ R(!errno && !*probe_end && probe_number>=0 && probe_number<=SIG_ATOMIC_MAX);
+ probe_output=(sig_atomic_t)probe_number;
+ R(fstat((int)probe_output,&probe_meta)==0 && S_ISFIFO(probe_meta.st_mode));
+ probe_flags=fcntl((int)probe_output,F_GETFL);
+ R(probe_flags>=0 && (probe_flags&O_NONBLOCK)!=0);
+ memset(&probe_action,0,sizeof(probe_action)); probe_action.sa_handler=probe_stat;
+ R(sigemptyset(&probe_action.sa_mask)==0 && sigaction(SIGUSR1,&probe_action,&previous_probe_action)==0);
  R(argc==5 || instrumented); held_negative=!strcmp(argv[4],"held-unsupported"); held=!strcmp(argv[4],"held") || held_negative; probe=!strcmp(argv[4],"unsupported") || !strcmp(argv[4],"metadata"); R(held || probe || !strcmp(argv[4],"quiet")); alarm(14); R(strlen(argv[1])<sizeof(c.origin)); strcpy(c.origin,argv[1]);
  strcpy(c.subject_id,"22345678-1234-1234-1234-123456789abc"); strcpy(c.subject_name,"Alice"); strcpy(c.token,"fixture-token.DO-NOT-LOG");
  settings.http.origin=c.origin; settings.http.ca_file=argv[2]; settings.http.connect_ms=instrumented ? 1400 : 700; settings.http.total_ms=1500;
@@ -152,7 +185,9 @@ int main(int argc,char **argv)
   input.http=&settings.http;input.policy=&settings.policy;input.credential=&c;
   input.encryption=GIN_RENDER_MODE_PLAIN;
   if(probe) waithead(a);
+  R(oldfd>=0 && oldfd<=SIG_ATOMIC_MAX); probe_target=(sig_atomic_t)oldfd;
   result=gin_account_history_one(&input);
+  probe_target=-1;
   if(!strcmp(argv[4],"unsupported") || held_negative) {
    if(held_negative) {
     const struct gin_live_view *head=gin_account_receive_peek(a);
@@ -196,6 +231,8 @@ int main(int argc,char **argv)
   gin_history_recovery_free(result.retained);
  }
 cleanup:
+ R(sigaction(SIGUSR1,&previous_probe_action,NULL)==0);
+ R(close((int)probe_output)==0); probe_output=-1;
  R(gin_account_output_close(&out)==0); R(gin_account_sinks_close(sinks)==0); R(gin_root_release(&root)==0);
  gin_account_dispatch_free(d); gin_account_receive_close(a);
  R(!gin_account_receive_cleanup_failed(a) && !gin_account_receive_quarantined(a)); gin_account_receive_free(a);
