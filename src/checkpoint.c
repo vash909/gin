@@ -171,15 +171,18 @@ done:
     if (close(fd)==-1 && code==GIN_CHECKPOINT_OK) code=GIN_CHECKPOINT_IO;
     memset(data,0,sizeof(data));return code;
 }
-enum gin_checkpoint_code gin_checkpoint_open(const struct gin_root *root,
+static enum gin_checkpoint_code checkpoint_open(const struct gin_root *root,
     const struct gin_history_scope *scope, int output,
-    struct gin_checkpoint **out, struct gin_checkpoint_progress *progress)
+    struct gin_checkpoint **out, struct gin_checkpoint_progress *progress,
+    gin_fs_name_prepare_fn prepare, int network_storage)
 {
     struct gin_checkpoint *h;struct stat lock;struct gin_name name;
     struct bytes key;enum gin_checkpoint_code code;
     if (!root || root->rootfd<0 || root->lockfd<0 || output<0 || !out || *out || !progress ||
         gin_history_scope_check(scope)!=GIN_HISTORY_OK ||
-        gin_name_prepare(scope->network_slug,scope->target,scope->chantypes,&name)==-1)
+        (network_storage && (scope->role!=GIN_RENDER_STATUS || strcmp(scope->target,"$server"))) ||
+        (prepare ? prepare(scope->network_slug,scope->target,scope->chantypes,&name) :
+         gin_name_prepare(scope->network_slug,scope->target,scope->chantypes,&name))==-1)
         return GIN_CHECKPOINT_INVALID;
     h=calloc(1,sizeof(*h));if (!h) return GIN_CHECKPOINT_NOMEM;
     h->root=root;h->output=output;h->window=-1;
@@ -191,7 +194,10 @@ enum gin_checkpoint_code gin_checkpoint_open(const struct gin_root *root,
     h->key_size=sizeof(h->key)-key.left;
     if (h->key_size>GIN_CHECKPOINT_BYTES_MAX-56u) { code=GIN_CHECKPOINT_INVALID;goto fail; }
     code=held_root(root,&lock);if (code!=GIN_CHECKPOINT_OK) goto fail;
-    h->window=gin_root_window_open(root,scope->network_slug,scope->target,scope->chantypes);
+    h->window=network_storage ? gin_root_network_open(root,scope->network_slug) :
+        prepare ? gin_root_window_open_named(root,scope->network_slug,scope->target,
+        scope->chantypes,prepare) :
+        gin_root_window_open(root,scope->network_slug,scope->target,scope->chantypes);
     if (h->window<0) { code=fs_error();goto fail; }
     code=output_guard(h,&lock,&h->output_stat);if (code!=GIN_CHECKPOINT_OK) goto fail;
     code=load(h,&lock);
@@ -201,6 +207,26 @@ enum gin_checkpoint_code gin_checkpoint_open(const struct gin_root *root,
 fail:
     if (h->window>=0) (void)close(h->window);
     memset(h,0,sizeof(*h));free(h);return code;
+}
+enum gin_checkpoint_code gin_checkpoint_open(const struct gin_root *root,
+    const struct gin_history_scope *scope, int output,
+    struct gin_checkpoint **out, struct gin_checkpoint_progress *progress)
+{
+    return checkpoint_open(root,scope,output,out,progress,NULL,0);
+}
+enum gin_checkpoint_code gin_checkpoint_open_named(const struct gin_root *root,
+    const struct gin_history_scope *scope, int output,
+    struct gin_checkpoint **out, struct gin_checkpoint_progress *progress,
+    gin_fs_name_prepare_fn prepare)
+{
+    if (!prepare) return GIN_CHECKPOINT_INVALID;
+    return checkpoint_open(root,scope,output,out,progress,prepare,0);
+}
+enum gin_checkpoint_code gin_checkpoint_open_network(const struct gin_root *root,
+    const struct gin_history_scope *scope, int output,
+    struct gin_checkpoint **out, struct gin_checkpoint_progress *progress)
+{
+    return checkpoint_open(root,scope,output,out,progress,NULL,1);
 }
 static int encode(struct gin_checkpoint *h, int64_t anchor, const struct stat *output,
                    unsigned char *data, size_t *size)

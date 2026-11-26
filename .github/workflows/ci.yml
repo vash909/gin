@@ -55,7 +55,8 @@ jobs:
 
   compatibility:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Three complete profiles plus dependency setup exceeded the former budget.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install developer tools
@@ -224,6 +225,9 @@ jobs:
           GIN_PROTOCOL_PREFIX='valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=all' python3 tests/test_protocol.py ProtocolTests.test_gated_login_order ProtocolTests.test_resume_and_fresh_preflight_each_call ProtocolTests.test_auth_failures_preserve_phase_and_clear_output
           valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
 
+          make CURL_CONFIG="$CURL_CONFIG" check-account-resources-valgrind
+          make CURL_CONFIG="$CURL_CONFIG" check-account-dispatch-hot-valgrind
+          make CURL_CONFIG="$CURL_CONFIG" check-account-history-one-valgrind
   gate:
     name: gate
     if: always()

@@ -276,8 +276,8 @@ gin_root_acquire(const char *path, struct gin_root *root)
 }
 
 int
-gin_root_init(const struct gin_root *root, const char *network,
-              const char *target, const char *chantypes)
+gin_root_init_named(const struct gin_root *root, const char *network,
+              const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare)
 {
     int netfd = -1, winfd = -1, outfd = -1;
     int result = -1, saved;
@@ -289,7 +289,8 @@ gin_root_init(const struct gin_root *root, const char *network,
         errno = EINVAL;
         return -1;
     }
-    if (gin_name_prepare(network, target, chantypes, &name) == -1)
+    if (prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1)
         return -1;
     oldmask = umask(077);
     netfd = private_dir(root->rootfd, name.network_component);
@@ -339,8 +340,8 @@ input_dir(int parent, const char *component)
 }
 
 int
-gin_root_input_open(const struct gin_root *root, const char *network,
-                    const char *target, const char *chantypes)
+gin_root_input_open_named(const struct gin_root *root, const char *network,
+                    const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare)
 {
     struct gin_name name;
     int netfd = -1, winfd = -1, fd = -1, result = -1, saved;
@@ -349,7 +350,7 @@ gin_root_input_open(const struct gin_root *root, const char *network,
         errno = EINVAL;
         return -1;
     }
-    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+    if (prepare(network, target, chantypes, &name) == -1 ||
         check_dir(root->rootfd) == -1)
         return -1;
     netfd = input_dir(root->rootfd, name.network_component);
@@ -377,8 +378,8 @@ done:
 }
 
 int
-gin_root_window_open(const struct gin_root *root, const char *network,
-                     const char *target, const char *chantypes)
+gin_root_window_open_named(const struct gin_root *root, const char *network,
+                     const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare)
 {
     struct gin_name name;
     int netfd, winfd, saved;
@@ -386,7 +387,7 @@ gin_root_window_open(const struct gin_root *root, const char *network,
         errno = EINVAL;
         return -1;
     }
-    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+    if (prepare(network, target, chantypes, &name) == -1 ||
         check_dir(root->rootfd) == -1)
         return -1;
     netfd = input_dir(root->rootfd, name.network_component);
@@ -403,8 +404,8 @@ gin_root_window_open(const struct gin_root *root, const char *network,
 }
 
 int
-gin_root_output_open(const struct gin_root *root, const char *network,
-                     const char *target, const char *chantypes)
+gin_root_output_open_named(const struct gin_root *root, const char *network,
+                     const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare)
 {
     struct gin_name name;
     int netfd = -1, winfd = -1, fd = -1, saved;
@@ -414,7 +415,7 @@ gin_root_output_open(const struct gin_root *root, const char *network,
         errno = EINVAL;
         return -1;
     }
-    if (gin_name_prepare(network, target, chantypes, &name) == -1 ||
+    if (prepare(network, target, chantypes, &name) == -1 ||
         check_dir(root->rootfd) == -1)
         return -1;
     netfd = input_dir(root->rootfd, name.network_component);
@@ -435,6 +436,95 @@ done:
     return fd;
 }
 
+int gin_root_init(const struct gin_root *r, const char *n, const char *t, const char *c)
+{
+    return gin_root_init_named(r, n, t, c, gin_name_prepare);
+}
+int gin_root_input_open(const struct gin_root *r, const char *n, const char *t, const char *c)
+{
+    return gin_root_input_open_named(r, n, t, c, gin_name_prepare);
+}
+int gin_root_output_open(const struct gin_root *r, const char *n, const char *t, const char *c)
+{
+    return gin_root_output_open_named(r, n, t, c, gin_name_prepare);
+}
+int gin_root_window_open(const struct gin_root *r, const char *n, const char *t, const char *c)
+{
+    return gin_root_window_open_named(r, n, t, c, gin_name_prepare);
+}
+
+int gin_root_network_init(const struct gin_root *root, const char *network)
+{
+    char component[256];
+    struct stat input;
+    mode_t oldmask;
+    int netfd = -1, outfd = -1, result = -1, saved;
+    if (root == NULL || root->rootfd < 0 || root->lockfd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_network_encode(network, component, sizeof(component)) == -1 ||
+        check_dir(root->rootfd) == -1) return -1;
+    oldmask = umask(077);
+    netfd = private_dir(root->rootfd, component);
+    if (netfd == -1) goto done;
+    if (mkfifoat(netfd, "in", 0600) == -1 && errno != EEXIST) goto done;
+    if (fstatat(netfd, "in", &input, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&input, 1) == -1) goto done;
+    outfd = output_file(netfd);
+    if (outfd != -1) result = 0;
+done:
+    saved = errno;
+    if (outfd != -1 && close(outfd) == -1 && result == 0) {
+        saved = errno;
+        result = -1;
+    }
+    if (netfd != -1) (void)close(netfd);
+    (void)umask(oldmask);
+    errno = saved;
+    return result;
+}
+
+int gin_root_network_open(const struct gin_root *root, const char *network)
+{
+    char component[256];
+    if (root == NULL || network == NULL || root->rootfd < 0 || root->lockfd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_network_encode(network, component, sizeof(component)) == -1 ||
+        check_dir(root->rootfd) == -1) return -1;
+    return input_dir(root->rootfd, component);
+}
+
+static int network_endpoint_open(const struct gin_root *root, const char *network, int fifo)
+{
+    char component[256];
+    int netfd, fd, saved;
+    if (root == NULL || root->rootfd < 0 || root->lockfd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (gin_network_encode(network, component, sizeof(component)) == -1 ||
+        check_dir(root->rootfd) == -1) return -1;
+    netfd = input_dir(root->rootfd, component);
+    if (netfd == -1) return -1;
+    fd = existing_endpoint(netfd, fifo ? "in" : "out", fifo,
+        (fifo ? O_RDONLY : O_WRONLY | O_APPEND) | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    saved = errno;
+    (void)close(netfd);
+    errno = saved;
+    return fd;
+}
+int gin_root_network_input_open(const struct gin_root *r, const char *n)
+{
+    return network_endpoint_open(r, n, 1);
+}
+int gin_root_network_output_open(const struct gin_root *r, const char *n)
+{
+    return network_endpoint_open(r, n, 0);
+}
+
 int
 gin_init(const char *path, const char *network, const char *target,
          const char *chantypes)
@@ -453,4 +543,168 @@ gin_init(const char *path, const char *network, const char *target,
         return -1;
     errno = saved;
     return result;
+}
+
+/* Checked helpers deliberately do not use legacy helpers with silent closes. */
+static int
+pair_same(const struct stat *a, const struct stat *b)
+{
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino;
+}
+
+static int
+pair_dir_stat(const struct stat *s)
+{
+    if (!S_ISDIR(s->st_mode) || (s->st_mode & 07777) != 0700 ||
+        s->st_uid != geteuid()) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+static void
+pair_close(int *fd, struct gin_fs_pair_result *r)
+{
+    if (*fd >= 0 && close(*fd) == -1) {
+        int saved = errno;
+        r->cleanup_failed = 1;
+        if (!r->error) r->error = saved;
+    }
+    *fd = -1;
+}
+
+static int
+pair_dir_guard(int parent, const char *name, int fd)
+{
+    struct stat opened, path;
+    if (fstat(fd, &opened) == -1 || pair_dir_stat(&opened) == -1 ||
+        fstatat(parent, name, &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        pair_dir_stat(&path) == -1) return -1;
+    if (!pair_same(&opened, &path)) { errno = EPERM; return -1; }
+    return 0;
+}
+
+static int
+pair_dir_open(int parent, const char *name, int *fd)
+{
+    struct stat before, opened;
+    if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+        pair_dir_stat(&before) == -1) return -1;
+    *fd = openat(parent, name,
+        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    if (*fd < 0) return -1;
+    if (fstat(*fd, &opened) == -1) return -1;
+    if (!pair_same(&before, &opened)) { errno = EPERM; return -1; }
+    return pair_dir_guard(parent, name, *fd);
+}
+
+static int
+pair_endpoint_guard(int parent, const char *name, int fd, int fifo)
+{
+    struct stat opened, after;
+    if (fstat(fd, &opened) == -1 || check_endpoint(&opened, fifo) == -1 ||
+        fstatat(parent, name, &after, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&after, fifo) == -1) return -1;
+    if (!pair_same(&opened, &after)) { errno = EPERM; return -1; }
+    return 0;
+}
+
+static int
+pair_endpoint(int parent, const char *name, int fifo, const struct stat *lock,
+              int *fd, struct gin_fs_pair_result *r)
+{
+    struct stat before, opened;
+    int exists, flags = (fifo ? O_RDONLY : O_WRONLY | O_APPEND) |
+        O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+    exists = fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == 0;
+    if (!exists && errno != ENOENT) return -1;
+    if (exists && check_endpoint(&before, fifo) == -1) return -1;
+    if (!exists) {
+        r->mutation_attempted = 1;
+        if (fifo) {
+            if (mkfifoat(parent, name, 0600) == -1) return -1;
+            if (fstatat(parent, name, &before, AT_SYMLINK_NOFOLLOW) == -1 ||
+                check_endpoint(&before, fifo) == -1) return -1;
+        } else flags |= O_CREAT | O_EXCL;
+    }
+    *fd = openat(parent, name, flags, 0600);
+    if (*fd < 0) return -1;
+    /* No close authority until the first fstat proves non-alias identity.
+     * Retain even an unproven non-alias: closing might drop the process lease. */
+    if (fstat(*fd, &opened) == -1) {
+        r->cleanup_failed = 1;
+        *fd = -1;
+        return -1;
+    }
+    if (pair_same(&opened, lock)) {
+        r->cleanup_failed = 1;
+        *fd = -1;
+        errno = EPERM;
+        return -1;
+    }
+    if (check_endpoint(&opened, fifo) == -1) return -1;
+    if ((exists || fifo) && !pair_same(&before, &opened)) {
+        errno = EPERM;
+        return -1;
+    }
+    return pair_endpoint_guard(parent, name, *fd, fifo);
+}
+
+struct gin_fs_pair_result
+gin_root_pair_prepare_named(const struct gin_root *root, const char *network,
+    const char *target, const char *chantypes, gin_fs_name_prepare_fn prepare,
+    struct gin_fs_pair *out)
+{
+    struct gin_fs_pair_result r = { 0, 0, 0 };
+    struct gin_fs_pair pair = { -1, -1 };
+    struct gin_name name;
+    struct stat lock, path;
+    int net = -1, win = -1;
+    mode_t mask;
+    if (!root || !network || !target || !chantypes || !prepare || !out ||
+        out->input != -1 || out->output != -1 ||
+        root->rootfd < 0 || root->lockfd < 0) {
+        r.error = EINVAL;
+        errno = r.error;
+        return r;
+    }
+    if (prepare(network, target, chantypes, &name) == -1 ||
+        check_dir(root->rootfd) == -1 ||
+        fstat(root->lockfd, &lock) == -1 || check_endpoint(&lock, 0) == -1 ||
+        fstatat(root->rootfd, ".gin.lock", &path, AT_SYMLINK_NOFOLLOW) == -1 ||
+        check_endpoint(&path, 0) == -1) {
+        r.error = errno;
+        return r;
+    }
+    if (!pair_same(&lock, &path)) { r.error = EPERM; errno = EPERM; return r; }
+    mask = umask(077);
+    if (pair_dir_open(root->rootfd, name.network_component, &net) == -1)
+        goto fail;
+    /* Network preflight is existing-only, before any creation attempt. */
+    r.mutation_attempted = 1;
+    if (mkdirat(net, name.window_component, 0700) == -1 && errno != EEXIST)
+        goto fail;
+    if (pair_dir_open(net, name.window_component, &win) == -1 ||
+        pair_dir_guard(root->rootfd, name.network_component, net) == -1 ||
+        pair_endpoint(win, "in", 1, &lock, &pair.input, &r) == -1 ||
+        pair_endpoint(win, "out", 0, &lock, &pair.output, &r) == -1 ||
+        pair_endpoint_guard(win, "in", pair.input, 1) == -1 ||
+        pair_endpoint_guard(win, "out", pair.output, 0) == -1 ||
+        pair_dir_guard(net, name.window_component, win) == -1 ||
+        pair_dir_guard(root->rootfd, name.network_component, net) == -1)
+        goto fail;
+    goto done;
+fail:
+    r.error = errno;
+done:
+    pair_close(&win, &r);
+    pair_close(&net, &r);
+    if (r.error || r.cleanup_failed) {
+        pair_close(&pair.input, &r);
+        pair_close(&pair.output, &r);
+    } else *out = pair;
+    (void)umask(mask);
+    if (r.error) errno = r.error;
+    return r;
 }

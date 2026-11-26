@@ -1,5 +1,6 @@
 #include "gin_connect.h"
 #include "connect_control.h"
+#include "connect_hot.h"
 #include "json_evidence.h"
 #include "gin_liveness.h"
 #include "liveness_values.h"
@@ -481,6 +482,29 @@ enum gin_connect_code gin_connect_new(const struct gin_connect_settings *setting
     if (c != GIN_CONNECT_OK) { gin_connect_free(s); return c; }
     *out = s; return GIN_CONNECT_OK;
 }
+enum gin_connect_code gin_connect_replan_closed(struct gin_connect *s,
+    const struct gin_connect_subscription *plan, size_t count)
+{
+    struct gin_connect *replacement = NULL;
+    enum gin_connect_code code;
+    size_t i;
+    if (!s || s->in_callback ||
+        (s->state != GIN_CONNECT_IDLE && s->state != GIN_CONNECT_STOPPED) ||
+        s->curl || s->upgrade_multi || s->headers || s->multi_added ||
+        s->socket != CURL_SOCKET_BAD || s->cleanup_bad || s->quarantined ||
+        s->query.outcome != GIN_QUERY_NONE || (!plan && count))
+        return GIN_CONNECT_INVALID;
+    if (count > GIN_CONNECT_TOPICS_MAX) return GIN_CONNECT_LIMIT;
+    code = gin_connect_new(&s->settings, &s->credential, plan, count,
+        NULL, NULL, &replacement);
+    if (code != GIN_CONNECT_OK) return code;
+    memcpy(s->topics, replacement->topics, sizeof(s->topics));
+    s->count = replacement->count;
+    for (i = 0; i < s->count; i++)
+        s->topics[i].status.topic = s->topics[i].text;
+    gin_connect_free(replacement);
+    return GIN_CONNECT_OK;
+}
 static size_t header(char *p, size_t size, size_t count, void *user)
 {
     struct gin_connect *s = user;
@@ -517,6 +541,88 @@ static enum gin_connect_code curl_error(CURLcode c)
         c == CURLE_PARTIAL_FILE) return GIN_CONNECT_TRANSPORT;
     if (c == CURLE_WEIRD_SERVER_REPLY || c == CURLE_TOO_MANY_REDIRECTS) return GIN_CONNECT_HANDSHAKE;
     return GIN_CONNECT_UNAVAILABLE;
+}
+enum gin_connect_code gin_connect_subscribe_query_live(struct gin_connect *s,
+    const char *slug, const char *peer, const char *chantypes,
+    uint64_t epoch, size_t *source_out)
+{
+    static const char prefix[] = "grappa:user:";
+    struct topic staged = {0};
+    struct gin_command command;
+    struct gin_phoenix_fields f;
+    struct gin_phoenix_refs refs;
+    struct gin_phoenix_bytes bytes = {NULL, 0};
+    struct timespec current, end;
+    unsigned char record[7 + GIN_COMMAND_NICK_MAX];
+    char root[GIN_WS_TOPIC_CAP], network[GIN_WS_TOPIC_CAP];
+    const char *subject;
+    size_t n, i;
+    int found = 0;
+    enum gin_ws_value_code vc;
+    enum gin_phoenix_code pc;
+    if (!s || !slug || !peer || !chantypes || !source_out || s->in_callback ||
+        s->state != GIN_CONNECT_READY || !s->count ||
+        s->query.outcome != GIN_QUERY_NONE || s->outbound.data || s->offset ||
+        s->writer != WIRE_IDLE || s->heartbeat == GIN_HEARTBEAT_QUEUED ||
+        s->heartbeat == GIN_HEARTBEAT_WRITING) return GIN_CONNECT_INVALID;
+    if (!epoch || epoch != s->result.socket_epoch) return GIN_CONNECT_SCOPE;
+    if (s->topics[0].status.state != GIN_CONNECT_TOPIC_JOINED ||
+        !s->topics[0].status.join_ref || !s->topics[0].ref[0] ||
+        strncmp(s->topics[0].text, prefix, sizeof(prefix)-1)) return GIN_CONNECT_SCOPE;
+    /* Derive from the actual authenticated joined root, not the constructor's
+     * potentially stale display label. No duplicate credential/bearer storage. */
+    subject = s->topics[0].text + sizeof(prefix)-1;
+    if (gin_ws_topic(subject, NULL, NULL, root, sizeof(root), &n) != GIN_WS_VALUE_OK ||
+        strcmp(root, s->topics[0].text)) return GIN_CONNECT_SCOPE;
+    vc = gin_ws_topic(subject, slug, NULL, network, sizeof(network), &n);
+    if (vc != GIN_WS_VALUE_OK) return vc == GIN_WS_VALUE_LIMIT ? GIN_CONNECT_LIMIT : GIN_CONNECT_INVALID;
+    for (i = 0; i < s->count; i++)
+        if (!strcmp(network, s->topics[i].text) && s->topics[i].has_network &&
+            !s->topics[i].has_target && !strcmp(slug, s->topics[i].network) &&
+            s->topics[i].status.state == GIN_CONNECT_TOPIC_JOINED &&
+            s->topics[i].status.join_ref && s->topics[i].ref[0]) found = 1;
+    if (!found) return GIN_CONNECT_SCOPE;
+    for (n = 0; n <= GIN_COMMAND_NICK_MAX && peer[n]; n++) {}
+    if (n > GIN_COMMAND_NICK_MAX) return GIN_CONNECT_LIMIT;
+    memcpy(record, "/query ", 7); memcpy(record + 7, peer, n);
+    if (gin_command_parse(record, 7+n, chantypes, &command) != GIN_COMMAND_OK ||
+        command.kind != GIN_COMMAND_QUERY) return GIN_CONNECT_INVALID;
+    vc = gin_ws_topic(subject, slug, peer, staged.text, sizeof(staged.text), &n);
+    if (vc != GIN_WS_VALUE_OK) return vc == GIN_WS_VALUE_LIMIT ? GIN_CONNECT_LIMIT : GIN_CONNECT_INVALID;
+    /* A due heartbeat owns the next scheduling turn, even before first byte. */
+    if (s->configured && s->heartbeat == GIN_HEARTBEAT_SCHEDULED) {
+        if (!read_clock(s, &current)) return fail(s, GIN_CONNECT_CLOCK);
+        if (time_compare(&current, &s->heartbeat_due) >= 0) return GIN_CONNECT_INVALID;
+    }
+    for (i = 0; i < s->count; i++) if (!strcmp(staged.text, s->topics[i].text)) {
+        if (s->topics[i].status.state != GIN_CONNECT_TOPIC_JOINED ||
+            !s->topics[i].status.join_ref || !s->topics[i].ref[0]) return GIN_CONNECT_SCOPE;
+        *source_out = i; return GIN_CONNECT_OK;
+    }
+    if (s->count >= GIN_CONNECT_TOPICS_MAX) return GIN_CONNECT_LIMIT;
+    refs = s->refs;
+    if (gin_phoenix_refs_next(&refs, staged.ref, sizeof(staged.ref)) != GIN_PHOENIX_OK)
+        return GIN_CONNECT_LIMIT;
+    f.join_ref = staged.ref; f.ref = staged.ref; f.topic = staged.text;
+    f.event = "phx_join"; f.payload.data = (const unsigned char *)"{}"; f.payload.length = 2;
+    pc = gin_phoenix_encode(&f, &bytes);
+    if (pc != GIN_PHOENIX_OK) return pc == GIN_PHOENIX_NOMEM ? GIN_CONNECT_NOMEM : GIN_CONNECT_LIMIT;
+    if (!read_clock(s, &current) || !time_add(&end, &current, (unsigned long)s->settings.join_ms)) {
+        gin_phoenix_bytes_free(&bytes); return fail(s, GIN_CONNECT_CLOCK);
+    }
+    strcpy(staged.network, slug); strcpy(staged.target, peer);
+    staged.has_network = staged.has_target = 1;
+    staged.status.state = GIN_CONNECT_TOPIC_PENDING;
+    i = s->count;
+    memcpy(&s->topics[i], &staged, sizeof(staged));
+    s->topics[i].status.topic = s->topics[i].text;
+    s->topics[i].status.join_ref = s->topics[i].ref;
+    s->refs = refs; s->deadline = end; s->outbound = bytes;
+    s->observed = current; s->have_observed = 1;
+    s->pending = i; s->count++; s->offset = 0;
+    s->state = GIN_CONNECT_JOINING; s->receive_drained = 0;
+    *source_out = i;
+    return GIN_CONNECT_OK;
 }
 static enum gin_connect_code queue_join(struct gin_connect *s)
 {

@@ -10,6 +10,7 @@ struct entry {
 struct gin_live_queue {
     size_t rows;
     size_t bytes;
+    size_t source_limit;
     size_t count;
     size_t bytes_used;
     size_t head;
@@ -48,6 +49,12 @@ static void wipe_mem(void *p, size_t n)
 enum gin_live_code gin_live_queue_new(size_t rows, size_t bytes,
     struct gin_live_queue **out)
 {
+    return gin_live_queue_new_sources(rows, bytes, GIN_LIVE_SOURCES_MAX, out);
+}
+
+enum gin_live_code gin_live_queue_new_sources(size_t rows, size_t bytes,
+    size_t source_limit, struct gin_live_queue **out)
+{
     struct gin_live_queue *q;
     if (out == NULL || *out != NULL)
         return GIN_LIVE_INVALID;
@@ -55,12 +62,15 @@ enum gin_live_code gin_live_queue_new(size_t rows, size_t bytes,
         return GIN_LIVE_INVALID;
     if (bytes < 1u || bytes > GIN_LIVE_BYTES_MAX)
         return GIN_LIVE_INVALID;
+    if (source_limit < 1u || source_limit > GIN_LIVE_ACCOUNT_SOURCES_MAX)
+        return GIN_LIVE_INVALID;
     q = (struct gin_live_queue *)malloc(sizeof(*q));
     if (q == NULL)
         return GIN_LIVE_NOMEM;
     memset(q, 0, sizeof(*q));
     q->rows = rows;
     q->bytes = bytes;
+    q->source_limit = source_limit;
     q->failure = GIN_LIVE_OK;
     *out = q;
     return GIN_LIVE_OK;
@@ -81,7 +91,7 @@ enum gin_live_code gin_live_queue_push(struct gin_live_queue *queue,
 
     if (view->kind < GIN_LIVE_QUERY_SNAPSHOT || view->kind > GIN_LIVE_MALFORMED)
         return GIN_LIVE_INVALID;
-    if (view->source_index >= GIN_LIVE_SOURCES_MAX)
+    if (view->source_index >= queue->source_limit)
         return GIN_LIVE_INVALID;
     if (view->observed_epoch == 0u)
         return GIN_LIVE_INVALID;

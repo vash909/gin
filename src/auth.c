@@ -141,8 +141,9 @@ done:
     return code;
 }
 
-enum gin_auth_code gin_auth_login(const struct gin_auth_settings *s,
-    const char *identifier, const char *password, struct gin_credential *out)
+static enum gin_auth_code login(const struct gin_auth_settings *s,
+    const char *identifier, const char *password, struct gin_credential *out,
+    struct gin_http_control *control)
 {
     json_t *root;
     char *data;
@@ -158,9 +159,23 @@ enum gin_auth_code gin_auth_login(const struct gin_auth_settings *s,
     data = json_dumps(root, JSON_COMPACT);
     json_decref(root);
     if (!data) return GIN_AUTH_INVALID;
-    code = exchange(s, "/auth/login", GIN_HTTP_POST_JSON, NULL, data, out, NULL);
+    code = exchange(s, "/auth/login", GIN_HTTP_POST_JSON, NULL, data, out, control);
     wipe(data, strlen(data)); free(data);
     return code;
+}
+
+enum gin_auth_code gin_auth_login(const struct gin_auth_settings *s,
+    const char *identifier, const char *password, struct gin_credential *out)
+{
+    return login(s, identifier, password, out, NULL);
+}
+
+enum gin_auth_code gin_auth_login_controlled(const struct gin_auth_settings *s,
+    const char *identifier, const char *password, struct gin_credential *out,
+    struct gin_http_control *control)
+{
+    if (!control) return gin_auth_login(s, identifier, password, out);
+    return login(s, identifier, password, out, control);
 }
 
 enum gin_auth_code gin_auth_resume(const struct gin_auth_settings *s,
