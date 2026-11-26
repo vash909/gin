@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 static int active, opens, closes, reads, fault, stats, fdstats, metadata_fd = -1;
+static mode_t fifo_mode;
 static int hot_openat(int dir, const char *name, int flags, ...)
 {
     assert(!active || (strcmp(name, GIN_ACCOUNT_ROOT_FILENAME) == 0 &&
@@ -78,8 +79,11 @@ static int hot_stat(int fd, struct stat *s)
     int rc = fstat(fd, s);
     if (active && fd == metadata_fd && rc == 0) {
         if (fault == 9) ++s->st_ino;
-        if (fault == 10) s->st_mode = S_IFIFO | 0600;
-        if (fault == 11) s->st_mode = S_IFREG | 0644;
+        if (fault == 10) { assert(S_ISFIFO(fifo_mode)); s->st_mode = fifo_mode; }
+        if (fault == 11) {
+            assert(S_ISREG(s->st_mode));
+            s->st_mode = (s->st_mode & ~(mode_t)07777) | 0644;
+        }
         if (fault == 12) s->st_nlink = 2;
         if (fault == 13) ++s->st_uid;
     }
@@ -177,8 +181,13 @@ int main(void)
     struct gin_credential c;
     unsigned char bytes[GIN_ACCOUNT_ROOT_MAX + 1];
     struct stat before, after;
-    int fd, saved, i; ssize_t n;
+    int fd, saved, i, type_pipe[2]; ssize_t n;
     alarm(15);
+    /* Derive the synthetic FIFO type from a real pipe, not optional S_IF* names. */
+    assert(pipe(type_pipe) == 0);
+    assert(fstat(type_pipe[0], &after) == 0 && S_ISFIFO(after.st_mode));
+    fifo_mode = (after.st_mode & ~(mode_t)07777) | 0600;
+    assert(close(type_pipe[0]) == 0 && close(type_pipe[1]) == 0);
     if (getenv("ROOT_QUARANTINE_CASE") != NULL)
         return quarantine(atoi(getenv("ROOT_QUARANTINE_CASE"))) ? 0 : 1;
     assert(quarantine(14));
