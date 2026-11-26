@@ -226,6 +226,7 @@ jobs:
           valgrind --quiet --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=all .build/gin init -d "$PWD/.build/valgrind-root" -n azzurra -c '#grappa'
 
           make CURL_CONFIG="$CURL_CONFIG" check-account-resources-valgrind
+          make CURL_CONFIG="$CURL_CONFIG" check-account-dispatch-hot-valgrind
   gate:
     name: gate
     if: always()

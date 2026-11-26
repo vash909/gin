@@ -112,3 +112,5 @@ valgrind --quiet --error-exitcode=99 --leak-check=full --errors-for-leak-kinds=a
 printf '%s\n' 'All local development checks passed.'
 
 make CURL_CONFIG="$host_curl_config" check-account-resources-valgrind
+
+make CURL_CONFIG="$host_curl_config" check-account-dispatch-hot-valgrind

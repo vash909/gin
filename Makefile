@@ -17,6 +17,7 @@ ACCOUNT_COMPONENT_TARGETS += .build/account_owner_driver
 ACCOUNT_COMPONENT_TARGETS += .build/gin .build/account_cli_control_driver .build/gin_account_fifo_observer
 ACCOUNT_COMPONENT_TARGETS += .build/test_account_registry
 ACCOUNT_COMPONENT_TARGETS += .build/test_connect_hot .build/test_connect_hot_fault .build/connect_hot_wss_driver
+ACCOUNT_COMPONENT_TARGETS += .build/test_account_dispatch_hot .build/account_dispatch_hot_wss_driver
 ACCOUNT_COMPONENT_TARGETS += .build/test_account_receive_hot .build/account_receive_hot_wss_driver
 ACCOUNT_RESOURCE_TARGETS = .build/test_credential_identity .build/test_account_root_hot_fault .build/test_account_fs_hot_fault .build/test_account_sinks_hot .build/test_account_sinks_hot_bind .build/test_account_sinks_hot_status .build/test_account_output_hot
 ACCOUNT_COMPONENT_TARGETS += $(ACCOUNT_RESOURCE_TARGETS)
@@ -45,11 +46,11 @@ ACCOUNT_SINKS_HEADERS = include/gin_auth.h include/gin_connect.h include/gin_cre
 
 ACCOUNT_RECEIVE_SUPPORT = src/account_plan.c src/account_naming.c src/session_live_queue.c src/fs.c $(CONNECT_SOURCES)
 ACCOUNT_RECEIVE_HEADERS = src/connect_hot.h include/gin_auth.h include/gin_command.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_http.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_send.h include/gin_topology.h src/account_naming.h src/account_plan.h src/account_receive.h src/connect_control.h src/connect_values.h src/fs_private.h src/http_control.h src/json_evidence.h src/liveness_values.h src/session_live_queue.h src/topology_internal.h
-ACCOUNT_DISPATCH_SUPPORT = src/account_receive.c src/account_plan.c src/account_naming.c src/session_live_queue.c src/session_live_projection.c src/history_page.c src/history_evidence.c $(CONNECT_SOURCES) $(RENDER_SOURCES)
+ACCOUNT_DISPATCH_SUPPORT = src/account_registry.c src/account_receive.c src/account_plan.c src/account_naming.c src/session_live_queue.c src/session_live_projection.c src/history_page.c src/history_evidence.c $(CONNECT_SOURCES) $(RENDER_SOURCES)
 ACCOUNT_DISPATCH_HEADERS = src/connect_hot.h include/gin_auth.h include/gin_command.h include/gin_config.h include/gin_connect.h include/gin_control.h include/gin_credential.h include/gin_fs.h include/gin_history.h include/gin_http.h include/gin_liveness.h include/gin_naming.h include/gin_phoenix.h include/gin_protocol.h include/gin_render.h include/gin_send.h include/gin_session.h include/gin_topology.h src/account_dispatch.h src/account_naming.h src/account_plan.h src/account_receive.h src/connect_control.h src/connect_values.h src/history_evidence.h src/history_values.h src/http_control.h src/json_evidence.h src/liveness_values.h src/render_values.h src/session_live_projection.h src/session_live_queue.h src/topology_internal.h
 
 # Cold unit includes connect.c; the WSS driver uses the private API and links it.
-ACCOUNT_OUTPUT_SUPPORT = src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) src/account_sinks.c src/account_fs.c src/account_root.c src/checkpoint.c src/fs.c src/history_render.c src/account_registry.c
+ACCOUNT_OUTPUT_SUPPORT = src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) src/account_sinks.c src/account_fs.c src/account_root.c src/checkpoint.c src/fs.c src/history_render.c
 ACCOUNT_OUTPUT_HEADERS = $(ACCOUNT_DISPATCH_HEADERS) src/account_output.h src/account_sinks.h src/account_fs.h src/account_root.h src/checkpoint.h src/fs_private.h
 ACCOUNT_HISTORY_BOOTSTRAP_SUPPORT = src/account_output.c $(ACCOUNT_OUTPUT_SUPPORT) src/history_recovery.c src/history_fetch.c src/history_path.c src/control.c src/send_reply.c
 ACCOUNT_HISTORY_BOOTSTRAP_HEADERS = src/account_history_bootstrap.h src/send_values.h $(ACCOUNT_OUTPUT_HEADERS)
@@ -244,6 +245,8 @@ check-account-components: $(ACCOUNT_COMPONENT_TARGETS)
 	.build/test_account_sinks_hot_bind
 	.build/test_account_sinks_hot_status
 	.build/test_account_output_hot
+	.build/test_account_dispatch_hot
+	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_driver GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
 	.build/test_account_receive_hot
 	GIN_ACCOUNT_HOT_DRIVER=$${PWD}/.build/account_receive_hot_wss_driver $(PYTHON) -m unittest discover -s tests -p test_account_receive_hot_wss.py -v
 	.build/test_account_registry
@@ -440,6 +443,8 @@ check: all $(ACCOUNT_COMPONENT_TARGETS) .build/test_checkpoint_fault .build/test
 	.build/test_account_sinks_hot_status
 	.build/test_account_output_hot
 	.build/test_account_registry
+	.build/test_account_dispatch_hot
+	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_driver GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
 	.build/test_account_receive_hot
 	GIN_ACCOUNT_HOT_DRIVER=$${PWD}/.build/account_receive_hot_wss_driver $(PYTHON) -m unittest discover -s tests -p test_account_receive_hot_wss.py -v
 	$(PYTHON) tests/test_make_dependencies.py "$(CHECK_MAKE)"
@@ -1257,3 +1262,71 @@ check-account-resources-valgrind: $(ACCOUNT_RESOURCE_TARGETS) .build/test_accoun
 
 
 .build/test_account_output_hot .build/test_account_output_hot_vg: src/phoenix.c include/gin_phoenix.h
+
+# The private unit includes dispatch.c and interposes receiver getters.
+ACCOUNT_DISPATCH_HOT_UNIT_SUPPORT = src/account_registry.c src/account_plan.c src/account_naming.c src/session_live_projection.c src/history_page.c src/history_evidence.c $(CONNECT_SOURCES) $(RENDER_SOURCES)
+.build/test_account_dispatch_hot: tests/test_account_dispatch_hot.c src/account_dispatch.c $(ACCOUNT_DISPATCH_HOT_UNIT_SUPPORT) $(ACCOUNT_DISPATCH_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/test_account_dispatch_hot.c $(ACCOUNT_DISPATCH_HOT_UNIT_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+.build/account_dispatch_hot_wss_driver: tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(ACCOUNT_DISPATCH_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+check-account-dispatch-hot: .build/test_account_dispatch_hot .build/account_dispatch_hot_wss_driver
+	.build/test_account_dispatch_hot
+	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_driver GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Dedicated instrumentation role; ordinary drivers never require Valgrind headers.
+VALGRIND_HEADERS = /usr/include/valgrind/memcheck.h /usr/include/valgrind/valgrind.h
+.build/account_dispatch_hot_wss_valgrind_driver: tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(ACCOUNT_DISPATCH_HEADERS) src/account_dispatch_hot.h src/account_receive_hot.h src/account_registry.h src/credential_identity.h $(VALGRIND_HEADERS)
+	mkdir -p .build
+	$(CC) $(CPPFLAGS) -DGIN_DISPATCH_VALGRIND -D_POSIX_C_SOURCE=200809L $(CFLAGS) -std=c99 -pedantic -Wall -Wextra -Werror -Iinclude -Isrc $(CURL_CFLAGS) $(JANSSON_CFLAGS) $(LDFLAGS) -o $@ tests/account_dispatch_hot_wss_driver.c src/account_dispatch.c $(ACCOUNT_DISPATCH_SUPPORT) $(CURL_LIBS) $(JANSSON_LIBS) $(LDLIBS)
+check-account-dispatch-hot-valgrind: .build/test_account_dispatch_hot .build/account_dispatch_hot_wss_valgrind_driver
+	printf '%s\n' '#!/bin/sh' 'exec valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all "$${0%/*}/account_dispatch_hot_wss_valgrind_driver" "$$@" --instrumented-setup' > .build/account_dispatch_hot_wss_vg
+	chmod +x .build/account_dispatch_hot_wss_vg
+	valgrind --trace-children=yes --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all .build/test_account_dispatch_hot
+	GIN_ACCOUNT_DISPATCH_HOT_DRIVER=$${PWD}/.build/account_dispatch_hot_wss_vg GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_valgrind_receipt.json $(PYTHON) -m unittest discover -s tests -p test_account_dispatch_hot_wss.py -v
+
+.build/account_cli_control_driver: src/account_dispatch_hot.h
+
+.build/account_dispatch_driver: src/account_dispatch_hot.h src/account_registry.h
+
+.build/account_dispatch_hot_wss_driver: src/account_dispatch_hot.h src/account_receive_hot.h src/account_registry.h src/credential_identity.h
+
+.build/account_history_bootstrap_driver: src/account_dispatch_hot.h
+
+.build/account_history_output_driver: src/account_dispatch_hot.h
+
+.build/account_output_driver: src/account_dispatch_hot.h
+
+.build/account_owner_driver: src/account_dispatch_hot.h
+
+.build/gin: src/account_dispatch_hot.h
+
+.build/gin_account_fifo_observer: src/account_dispatch_hot.h
+
+.build/gin_cleanup_fault: src/account_dispatch_hot.h
+
+.build/gin_owner_fault: src/account_dispatch_hot.h
+
+.build/gin_receive_observer: src/account_dispatch_hot.h
+
+.build/runtime_stderr: src/account_dispatch_hot.h
+
+.build/test_account_dispatch_fidelity: src/account_dispatch_hot.h src/account_registry.h
+
+.build/test_account_dispatch_hot: src/account_dispatch_hot.h src/account_registry.h src/credential_identity.h

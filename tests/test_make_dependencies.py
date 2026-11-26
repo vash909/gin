@@ -14,6 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if os.environ.get("GIN_MAKE_GRAPH_INSPECTION") == "1":
     raise SystemExit("make dry-run unexpectedly executed the graph-test recipe")
 MAKE = sys.argv.pop(1) if len(sys.argv) > 1 else "make"
+
+
+def graph_header_override(work):
+    """Isolate dependency-only SDK sentinels; never compile these headers."""
+    directory = work / "graph-sdk"
+    directory.mkdir(exist_ok=True)
+    headers = [directory / name for name in ("memcheck.h", "valgrind.h")]
+    for header in headers:
+        if not header.exists():
+            header.write_text("/* graph dependency sentinel, not a compiler input */\n")
+            os.utime(header, (1_000_000_000, 1_000_000_000))
+    return ["VALGRIND_HEADERS=" + " ".join(str(header) for header in headers)]
+
+
 TARGETS = (
     ".build/test_account_receive_control",
     ".build/test_status_projection",
@@ -84,7 +98,7 @@ class FreshCheckGraph(unittest.TestCase):
             for directory in ("src", "include", "tests"):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", "check-account-resources"):
-                child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"), "-n",
+                child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n",
                     "PYTHON=" + shlex.join([sys.executable, "-B"]), entry], cwd=work,
                     env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -123,6 +137,205 @@ class FreshCheckGraph(unittest.TestCase):
 
     def test_resources_recursive_inputs(self):
         for role in self.RESOURCE_ROLES:
+            with self.subTest(role=role):
+                self.assert_project_inputs_rebuild(role)
+
+    DISPATCH_HOT_ROLES = (".build/test_account_dispatch_hot",
+                          ".build/account_dispatch_hot_wss_driver")
+
+    def dispatch_hot_expected(self):
+        return [[self.DISPATCH_HOT_ROLES[0]],
+                ["GIN_ACCOUNT_DISPATCH_HOT_DRIVER=${PWD}/" + self.DISPATCH_HOT_ROLES[1],
+                 "GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_receipt.json",
+                 sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests",
+                 "-p", "test_account_dispatch_hot_wss.py", "-v"]]
+
+    def test_receive_hot_focused_closed_graph(self):
+        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gin-receive-closed-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            result = subprocess.run([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n",
+                "PYTHON=" + shlex.join([sys.executable, "-B"]), "check-account-receive-hot"],
+                cwd=work, capture_output=True, text=True, timeout=15, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("dispatch_hot", result.stdout,
+                             "focused receiver must not execute undeclared dispatch roles")
+            raw = result.stdout.splitlines()
+            calls = [(i, shlex.split(line)) for i, line in enumerate(raw)
+                     if not re.fullmatch(r"--- [^\n]+ ---", line.strip())
+                     and not line.startswith("echo ")]
+            for role in (".build/test_account_receive_hot", ".build/account_receive_hot_wss_driver"):
+                builds = [(i,w) for i,w in calls if "-o" in w and w[w.index("-o")+1] == role]
+                self.assertEqual(len(builds), 1)
+            expected = [[".build/test_account_receive_hot"],
+                ["GIN_ACCOUNT_HOT_DRIVER=${PWD}/.build/account_receive_hot_wss_driver",
+                 sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests",
+                 "-p", "test_account_receive_hot_wss.py", "-v"]]
+            executions = [(i,w) for i,w in calls if "-o" not in w and
+                (".build/test_account_receive_hot" in w or "test_account_receive_hot_wss.py" in w)]
+            self.assertEqual(len(executions), 2)
+            for (i, fields), want in zip(executions, expected):
+                self.assert_hot_command(fields, want,
+                    shlex.split(raw[i+1]) if i+1 < len(raw) else None)
+            self.assertFalse((work / ".build").exists())
+
+    def test_graph_discovery_without_real_valgrind_headers(self):
+        self.assert_graph_without_real_valgrind_headers(False)
+
+    def test_graph_profile_without_real_valgrind_headers(self):
+        self.assert_graph_without_real_valgrind_headers(True)
+
+    def assert_graph_without_real_valgrind_headers(self, profile):
+        from unittest.mock import patch
+        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gin-no-vg-", dir=scratch) as temporary:
+            work = Path(temporary)
+            missing = work / "absent-real-sdk"
+            self.assertFalse(missing.exists())
+            text = (ROOT / "Makefile").read_text()
+            text, count = re.subn(r"^VALGRIND_HEADERS = .*", "VALGRIND_HEADERS = " +
+                str(missing / "memcheck.h") + " " + str(missing / "valgrind.h"), text, flags=re.M)
+            self.assertEqual(count, 1)
+            (work / "Makefile").write_text(text)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            # The real dedicated target must still require its external headers.
+            control = subprocess.run([MAKE, "-n", ".build/account_dispatch_hot_wss_valgrind_driver"],
+                cwd=work, capture_output=True, text=True, timeout=15, check=False)
+            self.assertNotEqual(control.returncode, 0)
+            self.assertIn("absent-real-sdk", control.stderr)
+            with patch.dict(globals(), ROOT=work):
+                if profile:
+                    self.test_dispatch_hot_valgrind_profile()
+                else:
+                    self.assertIn(".build/account_dispatch_hot_wss_valgrind_driver",
+                                  self.native_consumers(work, ("src/account_dispatch.c",)))
+            self.assertFalse(missing.exists())
+            self.assertFalse((work / ".build").exists())
+
+    def test_dispatch_hot_exact_argv(self):
+        for expected in self.dispatch_hot_expected():
+            self.assert_hot_command(expected, expected)
+            self.assert_hot_command(["{", *expected, ";", "}"], expected)
+            self.assert_hot_command(["{", *expected], expected, ["}", "||", "exit", "$?"])
+            for bad in ([*expected, "-k", "incremental"], ["env", *expected],
+                        [*expected, "extra"], ["GIN_DISPATCH_CASE=positive", *expected]):
+                with self.assertRaises(AssertionError):
+                    self.assert_hot_command(bad, expected)
+
+    def test_dispatch_hot_discovers_one(self):
+        import test_account_dispatch_hot_wss as hot
+        self.assertEqual(unittest.defaultTestLoader.loadTestsFromModule(hot).countTestCases(), 1)
+        self.assertEqual(unittest.defaultTestLoader.getTestCaseNames(hot.DispatchHot),
+                         ["test_incremental_dispatch"])
+
+    def test_dispatch_hot_entry_graphs(self):
+        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gin-dispatch-hot-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            for entry in ("check", "check-account-components", "check-account-dispatch-hot"):
+                child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n",
+                    "PYTHON=" + shlex.join([sys.executable, "-B"]), entry], cwd=work,
+                    env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                try:
+                    out, err = child.communicate(timeout=15)
+                finally:
+                    try: os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError: pass
+                    child.wait()
+                self.assertEqual(child.returncode, 0, "dispatch hot entry missing: " + err)
+                raw = out.splitlines()
+                lines = [(i, shlex.split(s)) for i, s in enumerate(raw)
+                         if not re.fullmatch(r"--- [^\n]+ ---", s.strip())]
+                lines = [(i,w) for i,w in lines if w[:1] != ["echo"]]
+                for role, want in zip(self.DISPATCH_HOT_ROLES, self.dispatch_hot_expected()):
+                    builds = [(i,w) for i,w in lines if "-o" in w and w[w.index("-o")+1] == role]
+                    self.assertEqual(len(builds), 1, "dispatch hot compiler exactly once: " + role)
+                    linked = [w for w in builds[0][1] if w.endswith(".c")]
+                    self.assertEqual(len(linked), len(set(linked)), "dispatch duplicate TU")
+                    self.assertEqual(linked.count("src/account_registry.c"), 1)
+                    if role == self.DISPATCH_HOT_ROLES[0]:
+                        self.assertNotIn("src/account_dispatch.c", linked)
+                        self.assertNotIn("src/account_receive.c", linked)
+                        calls = [(i,w) for i,w in lines if role in w and "-o" not in w]
+                    else:
+                        self.assertIn("src/account_dispatch.c", linked)
+                        self.assertIn("src/account_receive.c", linked)
+                        self.assertIn("src/connect.c", linked)
+                        calls = [(i,w) for i,w in lines if "test_account_dispatch_hot_wss.py" in w]
+                    self.assertEqual(len(calls), 1, "dispatch hot exactly once unfiltered")
+                    i,w = calls[0]
+                    self.assert_hot_command(w, want, shlex.split(raw[i+1]) if i+1<len(raw) else None)
+                    self.assertLess(builds[0][0], i)
+                self.assertFalse((work / ".build").exists())
+
+    def test_dispatch_hot_recursive_inputs(self):
+        for role in self.DISPATCH_HOT_ROLES:
+            with self.subTest(role=role):
+                self.assert_project_inputs_rebuild(role)
+
+    def test_dispatch_hot_valgrind_profile(self):
+        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="gin-dispatch-vg-", dir=scratch) as temporary:
+            work = Path(temporary)
+            for directory in ("src", "include", "tests"):
+                (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
+            output = subprocess.check_output([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n",
+                "PYTHON=" + shlex.join([sys.executable, "-B"]),
+                "check-account-dispatch-hot-valgrind"], cwd=work, text=True)
+            raw = output.splitlines()
+            lines = [(i, shlex.split(line)) for i,line in enumerate(raw)
+                     if not re.fullmatch(r"--- [^\n]+ ---", line.strip())]
+            role = ".build/account_dispatch_hot_wss_valgrind_driver"
+            builds = [(i,w) for i,w in lines if "-o" in w and w[w.index("-o")+1] == role]
+            self.assertEqual(len(builds), 1)
+            self.assertEqual(builds[0][1].count("-DGIN_DISPATCH_VALGRIND"), 1)
+            linked = [w for w in builds[0][1] if w.endswith(".c")]
+            self.assertEqual(len(linked), len(set(linked)))
+            for source in ("src/account_dispatch.c", "src/account_receive.c", "src/account_registry.c"):
+                self.assertEqual(linked.count(source), 1)
+            wrappers = [(i,w) for i,w in lines if "printf" in w]
+            self.assertEqual(len(wrappers), 1)
+            wi, wrapper = wrappers[0]
+            offset = 1 if wrapper[:1] == ["{"] else 0
+            command = shlex.split(wrapper[offset+3])
+            expected_wrapper = ["printf", "%s\\n", "#!/bin/sh", wrapper[offset+3],
+                                ">", ".build/account_dispatch_hot_wss_vg"]
+            self.assert_hot_command(wrapper, expected_wrapper,
+                shlex.split(raw[wi+1]) if wi+1<len(raw) else None)
+            strict = ["valgrind", "--trace-children=yes", "--error-exitcode=99",
+                      "--leak-check=full", "--show-leak-kinds=all", "--errors-for-leak-kinds=all"]
+            self.assertEqual(command, ["exec", *strict,
+                "${0%/*}/account_dispatch_hot_wss_valgrind_driver", "$@", "--instrumented-setup"])
+            calls = [(i,w) for i,w in lines if "test_account_dispatch_hot_wss.py" in w]
+            self.assertEqual(len(calls), 1)
+            expected = self.dispatch_hot_expected()[1]
+            expected[0] = "GIN_ACCOUNT_DISPATCH_HOT_DRIVER=${PWD}/.build/account_dispatch_hot_wss_vg"
+            expected[1] = "GIN_ACCOUNT_DISPATCH_HOT_RECEIPT=.build/account_dispatch_hot_valgrind_receipt.json"
+            i,w = calls[0]
+            self.assert_hot_command(w, expected, shlex.split(raw[i+1]) if i+1<len(raw) else None)
+            self.assertLess(builds[0][0], i)
+            units = [(i,w) for i,w in lines if ".build/test_account_dispatch_hot" in w and "-o" not in w]
+            self.assertEqual(len(units), 1)
+            i,w = units[0]
+            self.assert_hot_command(w, [*strict, ".build/test_account_dispatch_hot"],
+                                    shlex.split(raw[i+1]) if i+1<len(raw) else None)
+            self.assertFalse((work / ".build").exists())
+        self.assert_project_inputs_rebuild(role)
+
+    def test_dispatch_hot_legacy_recursive_inputs(self):
+        consumers = self.native_consumers(ROOT, ("src/account_dispatch.c",))
+        self.assertTrue(set((*self.DISPATCH_HOT_ROLES, ".build/account_dispatch_hot_wss_valgrind_driver")).issubset(consumers))
+        for role in consumers:
             with self.subTest(role=role):
                 self.assert_project_inputs_rebuild(role)
 
@@ -168,7 +381,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", "check-account-receive-hot"):
                 with self.subTest(entry=entry):
-                    child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"),
+                    child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"),
                         "PYTHON=" + shlex.join([sys.executable, "-B"]), "-n", entry],
                         cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -303,7 +516,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", "check-connect-hot"):
                 with self.subTest(entry=entry):
-                    child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"),
+                    child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"),
                         "PYTHON=" + shlex.join([sys.executable, "-B"]), "-n", entry],
                         cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -339,7 +552,7 @@ class FreshCheckGraph(unittest.TestCase):
             for target in sorted(set(targets)):
                 if target.endswith(".o"):
                     continue
-                result = subprocess.run([MAKE, "-f", str(source_root / "Makefile"), "-n", target],
+                result = subprocess.run([MAKE, *graph_header_override(work), "-f", str(source_root / "Makefile"), "-n", target],
                                         cwd=work, capture_output=True, text=True, timeout=10, check=False)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 commands = [shlex.split(line) for line in result.stdout.splitlines()
@@ -382,7 +595,7 @@ class FreshCheckGraph(unittest.TestCase):
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 artifact.write_bytes(b"")
                 os.utime(artifact, (2_000_000_000, 2_000_000_000))
-            control = subprocess.run([MAKE, "-n", ".build/account_cli_control_driver"], cwd=work,
+            control = subprocess.run([MAKE, *graph_header_override(work), "-n", ".build/account_cli_control_driver"], cwd=work,
                                      capture_output=True, text=True, timeout=10, check=False)
             self.assertEqual(control.returncode, 0, control.stderr)
             self.assertNotIn(" -o .build/account_cli_control_driver ", control.stdout)
@@ -435,7 +648,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", "check-account-registry"):
                 with self.subTest(entry=entry):
-                    child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"), "-n", entry],
+                    child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n", entry],
                         cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
                     try:
@@ -507,7 +720,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", "check-account-dispatch-inventory"):
                 with self.subTest(entry=entry):
-                    result = subprocess.run([MAKE, "-f", str(ROOT / "Makefile"),
+                    result = subprocess.run([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"),
                         "PYTHON=" + shlex.join([sys.executable, "-B"]), "-n", entry],
                         cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                         capture_output=True, text=True, timeout=10, check=False)
@@ -629,7 +842,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for entry in ("check", "check-account-components", dedicated_target):
                 with self.subTest(entry=entry):
-                    child = subprocess.Popen([MAKE, "-f", str(ROOT / "Makefile"),
+                    child = subprocess.Popen([MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"),
                         "PYTHON=" + shlex.join([sys.executable, "-B"]), "-n", entry],
                         cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -831,7 +1044,7 @@ class FreshCheckGraph(unittest.TestCase):
                 (work / directory).symlink_to(ROOT / directory, target_is_directory=True)
             for check_target in ("check", "check-account-components"):
                 result = subprocess.run(
-                    [MAKE, "-f", str(ROOT / "Makefile"), "-n", check_target],
+                    [MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n", check_target],
                     cwd=work, env=dict(os.environ, GIN_MAKE_GRAPH_INSPECTION="1"),
                     capture_output=True, text=True, timeout=10, check=False,
                 )
@@ -908,9 +1121,17 @@ class FreshCheckGraph(unittest.TestCase):
                         shutil.copyfile(source, destination)
                         os.utime(destination, (1_000_000_000, 1_000_000_000))
 
+            # Isolate external header mtimes too; these are dependency sentinels,
+            # never compiler inputs or executable instrumentation substitutes.
+            extra_headers = []
+            if target == ".build/account_dispatch_hot_wss_valgrind_driver":
+                graph_header_override(work)
+                extra_headers = [work / "graph-sdk" / name
+                                 for name in ("memcheck.h", "valgrind.h")]
+
             def graph():
                 child = subprocess.Popen(
-                    [MAKE, "-f", str(ROOT / "Makefile"), "-n", target],
+                    [MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "-n", target],
                     cwd=work, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     text=True, start_new_session=True,
                 )
@@ -946,7 +1167,7 @@ class FreshCheckGraph(unittest.TestCase):
                     self.assertIsNotNone(found, "unresolved quoted include: " + name)
                     if found is not None:
                         pending.append(found)
-            dependencies = sorted(visited)
+            dependencies = sorted(visited) + extra_headers
             self.assertTrue(any(path.suffix == ".h" for path in dependencies))
             # This empty artifact is only an mtime fixture, never an executable.
             # Multi-stage legacy links also need synthetic object prerequisites.
@@ -990,7 +1211,7 @@ class FreshCheckGraph(unittest.TestCase):
             # overrides; the exact-argv oracle must reject hardcoded recipes.
             graph_python = shlex.join([sys.executable, "-B"])
             child = subprocess.Popen(
-                [MAKE, "-f", str(ROOT / "Makefile"), "PYTHON=" + graph_python,
+                [MAKE, *graph_header_override(work), "-f", str(ROOT / "Makefile"), "PYTHON=" + graph_python,
                  "-n", check_target],
                 cwd=work, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True,
