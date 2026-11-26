@@ -212,17 +212,14 @@ class InteractiveTests(unittest.TestCase):
             entered, release = srv.entered, srv.release
             master: int | None = None
             slave: int | None = None
-            child: subprocess.Popen[bytes] | None = None
+            child: PtyProcess | None = None
             try:
                 master, slave = pty.openpty()
                 termios.tcgetattr(slave)  # Check setup while the PTY is still live.
-                wrapper = ('import os,sys,fcntl,termios; '
-                           'fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); '
-                           'os.execv(sys.argv[2],sys.argv[2:])')
-                child = subprocess.Popen([sys.executable, '-c', wrapper, str(slave),
-                    os.environ['INTERACTIVE_DRIVER'], mode, origin, str(self.certdir / 'ca.pem')],
-                    stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
-                    pass_fds=(slave,), start_new_session=True)
+                # Retain the controlling session after native exit until its
+                # report and secrecy assertions have consumed all PTY output.
+                child = PtyProcess([os.environ['INTERACTIVE_DRIVER'], mode,
+                    origin, str(self.certdir / 'ca.pem')], slave)
                 transcript = b''
                 sent = False
                 interrupted_at = None
@@ -240,7 +237,7 @@ class InteractiveTests(unittest.TestCase):
                         sent = True
                     if mode == 'heldpost' and entered.is_set() and interrupted_at is None:
                         interrupted_at = time.monotonic()
-                        os.kill(child.pid, signal.SIGTERM)
+                        child.send_signal(signal.SIGTERM)
                     if child.poll() is not None:
                         break
                 self.assertIsNotNone(child.poll(), 'outer process-group deadline')
@@ -281,10 +278,13 @@ class InteractiveTests(unittest.TestCase):
                 try:
                     if child is not None:
                         try:
-                            if child.poll() is None:
-                                os.killpg(child.pid, signal.SIGKILL)
+                            try:
+                                if child.poll() is None:
+                                    child.kill()
+                            finally:
+                                child.wait(timeout=1)
                         finally:
-                            child.wait(timeout=1)
+                            child.close()
                 finally:
                     try:
                         release.set()
