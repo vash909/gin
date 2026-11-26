@@ -23,7 +23,7 @@ from pathlib import Path
 import test_protocol
 
 
-from pty_test_support import drain_pty
+from pty_test_support import PtyProcess, drain_pty
 
 
 class PtyDrainTests(unittest.TestCase):
@@ -204,29 +204,32 @@ class InteractiveTests(unittest.TestCase):
         finally:
             srv.close_bounded()
 
-    def run_case(self, mode, body=test_protocol.CONFIG, status=200):
+    def run_case(self, mode, body=test_protocol.CONFIG, status=200,
+                 defer_pty_read=False):
+        assert not defer_pty_read or mode == 'blocked'
         with self.fixture(body=body, auth_status=status) as (srv, origin):
             srv.held = mode == 'heldpost'
             entered, release = srv.entered, srv.release
             master: int | None = None
             slave: int | None = None
-            child: subprocess.Popen[bytes] | None = None
+            child: PtyProcess | None = None
             try:
                 master, slave = pty.openpty()
                 termios.tcgetattr(slave)  # Check setup while the PTY is still live.
-                wrapper = ('import os,sys,fcntl,termios; '
-                           'fcntl.ioctl(int(sys.argv[1]),termios.TIOCSCTTY,0); '
-                           'os.execv(sys.argv[2],sys.argv[2:])')
-                child = subprocess.Popen([sys.executable, '-c', wrapper, str(slave),
-                    os.environ['INTERACTIVE_DRIVER'], mode, origin, str(self.certdir / 'ca.pem')],
-                    stdin=subprocess.DEVNULL, stdout=slave, stderr=slave,
-                    pass_fds=(slave,), start_new_session=True)
+                # Retain the controlling session after native exit until its
+                # report and secrecy assertions have consumed all PTY output.
+                child = PtyProcess([os.environ['INTERACTIVE_DRIVER'], mode,
+                    origin, str(self.certdir / 'ca.pem')], slave)
                 transcript = b''
                 sent = False
                 interrupted_at = None
                 end = time.monotonic() + 6
                 while time.monotonic() < end:
-                    if select.select([master], [], [], .02)[0]:
+                    if defer_pty_read:
+                        # A slow observer is legitimate: no password is needed
+                        # for this rejected caller. Read only after native exit.
+                        time.sleep(.002)
+                    elif select.select([master], [], [], .02)[0]:
                         transcript += os.read(master, 16384)
                     if b'Password: ' in transcript and not sent:
                         self.assertFalse(termios.tcgetattr(slave)[3] & termios.ECHO)
@@ -234,7 +237,7 @@ class InteractiveTests(unittest.TestCase):
                         sent = True
                     if mode == 'heldpost' and entered.is_set() and interrupted_at is None:
                         interrupted_at = time.monotonic()
-                        os.kill(child.pid, signal.SIGTERM)
+                        child.send_signal(signal.SIGTERM)
                     if child.poll() is not None:
                         break
                 self.assertIsNotNone(child.poll(), 'outer process-group deadline')
@@ -265,17 +268,23 @@ class InteractiveTests(unittest.TestCase):
                 self.assertEqual(sent, mode != 'bad' and not early)
                 if early:
                     self.assertFalse(b'Password: ' in transcript)
-                self.assertTrue(('ok=%d attempted=%d' % (int(mode == 'healthy'), int(expected))).encode() in transcript)
+                self.assertTrue(
+                    ('ok=%d attempted=%d' % (int(mode == 'healthy'), int(expected))).encode() in transcript,
+                    'result report absent: captured_bytes=%d deferred=%d child_rc=%d '
+                    '(transcript omitted)' % (len(transcript), int(defer_pty_read), child.returncode))
                 if expected:
                     self.assertTrue(b'wiped=1' in transcript)
             finally:
                 try:
                     if child is not None:
                         try:
-                            if child.poll() is None:
-                                os.killpg(child.pid, signal.SIGKILL)
+                            try:
+                                if child.poll() is None:
+                                    child.kill()
+                            finally:
+                                child.wait(timeout=1)
                         finally:
-                            child.wait(timeout=1)
+                            child.close()
                 finally:
                     try:
                         release.set()
@@ -286,6 +295,58 @@ class InteractiveTests(unittest.TestCase):
                         finally:
                             if slave is not None:
                                 os.close(slave)
+
+    def test_blocked_caller_deferred_pty_reader(self):
+        self.run_case('blocked', defer_pty_read=True)
+
+    def test_pty_report_session_boundary(self):
+        # Controlled transport characterization, not a login replacement.
+        # Both schedules use the same checked write and wait for native exit.
+        # Only the retained session owner's lifetime differs before PTY drain.
+        marker = b'PTYReportBoundaryCheckedWrite'
+        code = ('import os,sys; data=b"PTYReportBoundaryCheckedWrite"; '
+                'count=os.write(1,data); assert count==len(data); '
+                'assert os.write(int(sys.argv[1]),str(count).encode()+b"\\n")>0')
+        for close_before_read in (False, True):
+            with self.subTest(close_before_read=close_before_read):
+                descriptors: list[int] = []
+                child: PtyProcess | None = None
+                deadline = time.monotonic() + 6
+                try:
+                    master, slave = pty.openpty()
+                    descriptors.extend((master, slave))
+                    receipt_read, receipt_write = os.pipe()
+                    descriptors.extend((receipt_read, receipt_write))
+                    os.set_blocking(receipt_read, False)
+                    child = PtyProcess(
+                        [sys.executable, '-B', '-c', code, str(receipt_write)],
+                        slave, pass_fds=(receipt_write,))
+                    os.close(receipt_write)
+                    descriptors.remove(receipt_write)
+                    self.assertEqual(child.wait(timeout=max(0, deadline-time.monotonic())), 0)
+                    self.assertTrue(select.select(
+                        [receipt_read], [], [], max(0, deadline-time.monotonic()))[0])
+                    self.assertEqual(os.read(receipt_read, 64), str(len(marker)).encode()+b'\n')
+                    if close_before_read:
+                        child.close()
+                    captured = drain_pty(master, b'', deadline)
+                    self.assertIn(captured, (b'', marker), 'unexpected probe bytes (omitted)')
+                    if not close_before_read:
+                        self.assertEqual(captured, marker, 'live owner must preserve checked output')
+                    print('PTY_REPORT_BOUNDARY '+json.dumps({
+                        'owner_closed_before_read': close_before_read,
+                        'native_exit': child.returncode,
+                        'checked_write_bytes': len(marker),
+                        'captured_bytes': len(captured),
+                        'report_present': captured == marker,
+                    }, sort_keys=True), flush=True)
+                finally:
+                    try:
+                        if child is not None:
+                            child.close()
+                    finally:
+                        for fd in descriptors:
+                            os.close(fd)
 
     def test_after_response_fault_is_failure(self):
         original = StrictHandler.do_POST
