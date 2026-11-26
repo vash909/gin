@@ -16,6 +16,13 @@ if os.environ.get("GIN_MAKE_GRAPH_INSPECTION") == "1":
 MAKE = sys.argv.pop(1) if len(sys.argv) > 1 else "make"
 
 
+def graph_scratch():
+    """Keep graph workspaces absolute, including empty or relative TMPDIR."""
+    directory = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch").resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 def graph_header_override(work):
     """Isolate dependency-only SDK sentinels; never compile these headers."""
     directory = work / "graph-sdk"
@@ -91,8 +98,7 @@ class FreshCheckGraph(unittest.TestCase):
     RESOURCE_ROLES = ('.build/test_credential_identity', '.build/test_account_root_hot_fault', '.build/test_account_fs_hot_fault', '.build/test_account_sinks_hot', '.build/test_account_sinks_hot_bind', '.build/test_account_sinks_hot_status', '.build/test_account_output_hot')
 
     def test_resources_graph_exact_once(self):
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-resources-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -151,8 +157,7 @@ class FreshCheckGraph(unittest.TestCase):
                  "-p", "test_account_dispatch_hot_wss.py", "-v"]]
 
     def test_receive_hot_focused_closed_graph(self):
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-receive-closed-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -190,8 +195,7 @@ class FreshCheckGraph(unittest.TestCase):
 
     def assert_graph_without_real_valgrind_headers(self, profile):
         from unittest.mock import patch
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-no-vg-", dir=scratch) as temporary:
             work = Path(temporary)
             missing = work / "absent-real-sdk"
@@ -208,7 +212,8 @@ class FreshCheckGraph(unittest.TestCase):
                 cwd=work, capture_output=True, text=True, timeout=15, check=False)
             self.assertNotEqual(control.returncode, 0)
             self.assertIn("absent-real-sdk", control.stderr)
-            with patch.dict(globals(), ROOT=work):
+            # Pin nested scratch outside the substituted ROOT even without TMPDIR.
+            with patch.dict(globals(), ROOT=work), patch.dict(os.environ, TMPDIR=str(scratch)):
                 if profile:
                     self.test_dispatch_hot_valgrind_profile()
                 else:
@@ -216,6 +221,35 @@ class FreshCheckGraph(unittest.TestCase):
                                   self.native_consumers(work, ("src/account_dispatch.c",)))
             self.assertFalse(missing.exists())
             self.assertFalse((work / ".build").exists())
+
+    def test_graph_scratch_environment_isolation(self):
+        from unittest.mock import patch
+        scratch = graph_scratch()
+        original_root = ROOT
+        original_present = "TMPDIR" in os.environ
+        original_value = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(prefix="gin-scratch-control-", dir=scratch) as temporary:
+            for mode in ("unset", "empty", "configured", "relative"):
+                with self.subTest(mode=mode):
+                    environment = dict(os.environ)
+                    if mode == "unset":
+                        environment.pop("TMPDIR", None)
+                    elif mode == "relative":
+                        environment["TMPDIR"] = os.path.relpath(temporary)
+                    else:
+                        environment["TMPDIR"] = "" if mode == "empty" else temporary
+                    with patch.dict(os.environ, environment, clear=True):
+                        expected = (Path(temporary) if mode in ("configured", "relative")
+                                    else ROOT / ".build/test-scratch").resolve()
+                        self.assertEqual(graph_scratch(), expected)
+                        self.assertTrue(graph_scratch().is_absolute())
+                        self.assert_graph_without_real_valgrind_headers(False)
+                        self.assert_graph_without_real_valgrind_headers(True)
+                        self.assertIs(ROOT, original_root)
+                        self.assertEqual("TMPDIR" in os.environ, "TMPDIR" in environment)
+                        self.assertEqual(os.environ.get("TMPDIR"), environment.get("TMPDIR"))
+                    self.assertEqual("TMPDIR" in os.environ, original_present)
+                    self.assertEqual(os.environ.get("TMPDIR"), original_value)
 
     def test_dispatch_hot_exact_argv(self):
         for expected in self.dispatch_hot_expected():
@@ -234,8 +268,7 @@ class FreshCheckGraph(unittest.TestCase):
                          ["test_incremental_dispatch"])
 
     def test_dispatch_hot_entry_graphs(self):
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-dispatch-hot-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -283,8 +316,7 @@ class FreshCheckGraph(unittest.TestCase):
                 self.assert_project_inputs_rebuild(role)
 
     def test_dispatch_hot_valgrind_profile(self):
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-dispatch-vg-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -373,8 +405,7 @@ class FreshCheckGraph(unittest.TestCase):
             "test_start_rename_upgrade_failure_retry"])
 
     def test_receive_hot_all_three_entry_graphs(self):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-receive-hot-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -508,8 +539,7 @@ class FreshCheckGraph(unittest.TestCase):
             self.assertLess(builds[0][0], i, "hot driver must build before execution")
 
     def test_hot_all_three_entry_graphs(self):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-hot-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -543,8 +573,7 @@ class FreshCheckGraph(unittest.TestCase):
         source_root = source_root.resolve()
         targets = re.findall(r"^(\.build/[^ :]+):", (source_root / "Makefile").read_text(), re.M)
         consumers = []
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-native-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -581,8 +610,7 @@ class FreshCheckGraph(unittest.TestCase):
 
     def test_native_consumer_discovery_ignores_warm_source_tree(self):
         expected = self.native_consumers(ROOT)
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-native-warm-", dir=scratch) as temporary:
             work = Path(temporary)
             shutil.copyfile(ROOT / "Makefile", work / "Makefile")
@@ -640,8 +668,7 @@ class FreshCheckGraph(unittest.TestCase):
         expected_sources = ["tests/test_account_registry.c", "src/account_plan.c",
                             "src/account_naming.c", "src/naming.c", "src/topology.c",
                             "src/connect_topic.c", "src/command.c", "src/account_registry.c"]
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-registry-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -712,8 +739,7 @@ class FreshCheckGraph(unittest.TestCase):
         self.assertEqual(unittest.defaultTestLoader.getTestCaseNames(dispatch.Replan), ["test_receive"])
 
     def test_inventory_all_three_entry_graphs(self):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-inventory-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -834,8 +860,7 @@ class FreshCheckGraph(unittest.TestCase):
                                          ["}", "||", "exit", "0"], suite=suite)
 
     def assert_fifo_entry_graphs(self, suite, dedicated_target):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-fifo-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -1036,8 +1061,7 @@ class FreshCheckGraph(unittest.TestCase):
                 self.assert_project_inputs_rebuild(target)
 
     def test_transport_scenarios_in_both_check_graphs(self):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-transport-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             for directory in ("src", "include", "tests"):
@@ -1108,8 +1132,7 @@ class FreshCheckGraph(unittest.TestCase):
                 self.assert_project_inputs_rebuild(target)
 
     def assert_project_inputs_rebuild(self, target):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-header-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             # Copy inputs: synthetic timestamp changes must never touch the checkout.
@@ -1199,8 +1222,7 @@ class FreshCheckGraph(unittest.TestCase):
         self.assert_check_graph("check-account-components")
 
     def assert_check_graph(self, check_target):
-        scratch = Path(os.environ.get("TMPDIR", ROOT / ".build/test-scratch"))
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(prefix="gin-make-graph-", dir=scratch) as temporary:
             work = Path(temporary)
             # Only the graph is inspected; no application uses these symlinks.
@@ -1363,8 +1385,7 @@ class ReceiveHotInstrumentation(unittest.TestCase):
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-        scratch = Path(os.environ.get("TMPDIR") or ROOT / ".build/test-scratch")
-        scratch.mkdir(parents=True, exist_ok=True)
+        scratch = graph_scratch()
         with tempfile.TemporaryDirectory(dir=scratch) as tmp:
             root = Path(tmp)
             wrapper = root / "recording wrapper"
