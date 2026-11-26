@@ -7,6 +7,7 @@
 #include "account_sinks_hot.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,15 @@
  * this fixed 48-byte record is below POSIX's minimum PIPE_BUF. SIGUSR1 masks
  * itself. Preserve errno, use no stdio/allocation/curl, never retry a write. */
 static volatile sig_atomic_t probe_output=-1,probe_target=-1;
+/* Both the signal storage and the syscall argument must preserve the FD. */
+static int probe_fd_valid(long value)
+{
+ if(value<0 || value>INT_MAX) return 0;
+#if SIG_ATOMIC_MAX < INT_MAX
+ if(value>SIG_ATOMIC_MAX) return 0;
+#endif
+ return 1;
+}
 static void probe_stat(int signo)
 {
  int saved=errno,rc; struct stat st; unsigned char wire[48];
@@ -101,7 +111,7 @@ int main(int argc,char **argv)
  const char *probe_text=getenv("GIN_HISTORY_ONE_PROBE_FD"); char *probe_end;
  long probe_number; struct stat probe_meta; int probe_flags;
  R(probe_text && *probe_text); errno=0; probe_number=strtol(probe_text,&probe_end,10);
- R(!errno && !*probe_end && probe_number>=0 && probe_number<=SIG_ATOMIC_MAX);
+ R(!errno && !*probe_end && probe_fd_valid(probe_number));
  probe_output=(sig_atomic_t)probe_number;
  R(fstat((int)probe_output,&probe_meta)==0 && S_ISFIFO(probe_meta.st_mode));
  probe_flags=fcntl((int)probe_output,F_GETFL);
@@ -185,7 +195,7 @@ int main(int argc,char **argv)
   input.http=&settings.http;input.policy=&settings.policy;input.credential=&c;
   input.encryption=GIN_RENDER_MODE_PLAIN;
   if(probe) waithead(a);
-  R(oldfd>=0 && oldfd<=SIG_ATOMIC_MAX); probe_target=(sig_atomic_t)oldfd;
+  R(probe_fd_valid(oldfd)); probe_target=(sig_atomic_t)oldfd;
   result=gin_account_history_one(&input);
   probe_target=-1;
   if(!strcmp(argv[4],"unsupported") || held_negative) {
